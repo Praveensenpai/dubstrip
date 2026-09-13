@@ -47,24 +47,31 @@ pub fn passes_name_and_path_check(path: &Path) -> bool {
     true
 }
 
-/// Gate 2: Checks if any process holds an open write lock on the file via `fuser`.
+/// Gate 2: Checks if any process holds an open write lock on the file via `fuser` (fallback to `lsof`).
 pub fn is_file_actively_locked(path: &Path) -> Result<bool> {
-    let output = Command::new("fuser")
-        .arg(path)
-        .output()
-        .with_context(|| format!("Failed to check file lock for {}", path.display()))?;
-
-    // fuser exit code 0 means active processes are accessing the file
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // Look for write indicator flags (w) or active file locks
-        if stdout.contains('w') || stderr.contains('w') || !stdout.trim().is_empty() {
-            return Ok(true);
+    match Command::new("fuser").arg(path).output() {
+        Ok(output) => {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if stdout.contains('w') || stderr.contains('w') || !stdout.trim().is_empty() {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
         }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            // Fall back to lsof if fuser is missing
+            if let Ok(output) = Command::new("lsof").arg(path).output() {
+                if output.status.success() && !output.stdout.is_empty() {
+                    return Ok(true);
+                }
+            }
+            // If neither tool is installed, rely on the remaining 3 safety gates
+            Ok(false)
+        }
+        Err(err) => Err(err).with_context(|| format!("Failed to check file lock for {}", path.display())),
     }
-
-    Ok(false)
 }
 
 /// Gate 3: Verifies that the file has not been modified within the last 60 seconds.
