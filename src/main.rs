@@ -109,6 +109,15 @@ fn handle_strip(path: &Path, auto: bool, dry_run: bool, force: bool) -> Result<(
         .count();
 
     if strip_count == 0 {
+        let filename = path
+            .file_name()
+            .map_or_else(|| "File".to_string(), |s| s.to_string_lossy().into_owned());
+        println!(
+            "\n  {} {} is already clean (only native {} audio present).\n",
+            "✔".green().bold(),
+            filename.cyan(),
+            origin.native_lang_name.bold()
+        );
         return Ok(());
     }
 
@@ -155,15 +164,22 @@ fn collect_sweep_jobs(dir: &Path, auto: bool, dry_run: bool) -> Result<Vec<Sweep
             .filter(|d| d.action == ui::Action::Strip)
             .count();
 
-        if strip_count == 0 {
-            continue;
-        }
-
-        ui::render_inspection_table(&media, &origin, &decisions);
         let filename = entry.file_name().map_or_else(
             || "Unknown".to_string(),
             |s| s.to_string_lossy().into_owned(),
         );
+
+        if strip_count == 0 {
+            println!(
+                "  {} {} is already clean ({})",
+                "✔".green(),
+                filename.dimmed(),
+                origin.native_lang_name.dimmed()
+            );
+            continue;
+        }
+
+        ui::render_inspection_table(&media, &origin, &decisions);
 
         if dry_run {
             println!("  🔍 [Dry-run] Would queue for stripping ({strip_count} dubs)");
