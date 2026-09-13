@@ -66,7 +66,17 @@ To guarantee that active torrents or file transfers are never corrupted or remux
 
 ## 🚀 Quick Installation
 
-### Build & Install From Source
+### 🪄 One-Liner Magic (Recommended)
+
+Install `dubstrip` in seconds with automatic architecture detection (`x86_64` / `aarch64`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Praveensenpai/dubstrip/main/install.sh | bash
+```
+
+<br>
+
+### 🛠️ Building From Source
 ```bash
 git clone https://github.com/Praveensenpai/dubstrip.git
 cd dubstrip
