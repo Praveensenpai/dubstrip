@@ -2,6 +2,7 @@ mod ai;
 mod config;
 mod decide;
 mod gemini;
+mod notify;
 mod probe;
 mod remux;
 mod safety;
@@ -203,6 +204,15 @@ fn handle_strip(path: &Path, auto: bool, dry_run: bool, force: bool) -> Result<(
         remux::format_bytes(saved).green().bold()
     );
 
+    let origin_desc = format!("{} (via {})", origin.native_lang_name, origin.source);
+    notify::notify_strip(
+        &origin.title,
+        &origin_desc,
+        &decisions,
+        media.size_bytes,
+        saved,
+    );
+
     Ok(())
 }
 
@@ -211,6 +221,10 @@ struct SweepJob {
     keep_indices: Vec<u32>,
     strip_count: usize,
     filename: String,
+    title: String,
+    origin_desc: String,
+    decisions: Vec<ui::TrackDecision>,
+    orig_size: u64,
 }
 
 fn collect_sweep_jobs(dir: &Path, auto: bool, dry_run: bool) -> Result<Vec<SweepJob>> {
@@ -248,31 +262,33 @@ fn collect_sweep_jobs(dir: &Path, auto: bool, dry_run: bool) -> Result<Vec<Sweep
 
         ui::render_inspection_table(&media, &origin, &decisions);
 
-        if dry_run {
+        let origin_desc = format!("{} (via {})", origin.native_lang_name, origin.source);
+        let keep_indices = if dry_run {
             println!("  🔍 [Dry-run] Would queue for stripping ({strip_count} dubs)");
-            jobs.push(SweepJob {
-                path: entry,
-                keep_indices: Vec::new(),
-                strip_count,
-                filename,
-            });
-            continue;
-        }
+            Vec::new()
+        } else {
+            match ui::prompt_confirmation(&decisions, auto) {
+                Ok(indices) => {
+                    println!("  {} Queued for batch stripping.", "✔".green());
+                    indices
+                }
+                Err(_) => {
+                    println!("  {} Skipped by user.", "•".dimmed());
+                    continue;
+                }
+            }
+        };
 
-        match ui::prompt_confirmation(&decisions, auto) {
-            Ok(keep_indices) => {
-                println!("  {} Queued for batch stripping.", "✔".green());
-                jobs.push(SweepJob {
-                    path: entry,
-                    keep_indices,
-                    strip_count,
-                    filename,
-                });
-            }
-            Err(_) => {
-                println!("  {} Skipped by user.", "•".dimmed());
-            }
-        }
+        jobs.push(SweepJob {
+            path: entry,
+            keep_indices,
+            strip_count,
+            filename,
+            title: origin.title,
+            origin_desc,
+            decisions,
+            orig_size: media.size_bytes,
+        });
     }
     Ok(jobs)
 }
@@ -304,6 +320,13 @@ fn execute_sweep_jobs(jobs: &[SweepJob]) -> (usize, u64) {
                     "✔".green().bold(),
                     job.strip_count,
                     remux::format_bytes(saved).green().bold()
+                );
+                notify::notify_strip(
+                    &job.title,
+                    &job.origin_desc,
+                    &job.decisions,
+                    job.orig_size,
+                    saved,
                 );
             }
             Err(err) => {
