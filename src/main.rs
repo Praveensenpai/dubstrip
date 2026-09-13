@@ -135,6 +135,102 @@ fn handle_strip(path: &Path, auto: bool, dry_run: bool, force: bool) -> Result<(
     Ok(())
 }
 
+struct SweepJob {
+    path: PathBuf,
+    keep_indices: Vec<u32>,
+    strip_count: usize,
+    filename: String,
+}
+
+fn collect_sweep_jobs(dir: &Path, auto: bool, dry_run: bool) -> Result<Vec<SweepJob>> {
+    let mut jobs = Vec::new();
+    for entry in walk_video_files(dir) {
+        let Ok(media) = probe::probe_file(&entry) else {
+            continue;
+        };
+        let origin = ai::resolve_film_origin(&entry)?;
+        let decisions = decide::evaluate_audio_streams(&media, &origin);
+        let strip_count = decisions
+            .iter()
+            .filter(|d| d.action == ui::Action::Strip)
+            .count();
+
+        if strip_count == 0 {
+            continue;
+        }
+
+        ui::render_inspection_table(&media, &origin, &decisions);
+        let filename = entry.file_name().map_or_else(
+            || "Unknown".to_string(),
+            |s| s.to_string_lossy().into_owned(),
+        );
+
+        if dry_run {
+            println!("  🔍 [Dry-run] Would queue for stripping ({strip_count} dubs)");
+            jobs.push(SweepJob {
+                path: entry,
+                keep_indices: Vec::new(),
+                strip_count,
+                filename,
+            });
+            continue;
+        }
+
+        match ui::prompt_confirmation(&decisions, auto) {
+            Ok(keep_indices) => {
+                println!("  {} Queued for batch stripping.", "✔".green());
+                jobs.push(SweepJob {
+                    path: entry,
+                    keep_indices,
+                    strip_count,
+                    filename,
+                });
+            }
+            Err(_) => {
+                println!("  {} Skipped by user.", "•".dimmed());
+            }
+        }
+    }
+    Ok(jobs)
+}
+
+fn execute_sweep_jobs(jobs: &[SweepJob]) -> (usize, u64) {
+    let mut total_saved = 0u64;
+    let mut successful = 0usize;
+    let total = jobs.len();
+
+    println!(
+        "\n  {} Starting batch strip on {} queued file(s)...\n",
+        "🚀".cyan().bold(),
+        total.to_string().bold()
+    );
+
+    for (i, job) in jobs.iter().enumerate() {
+        println!(
+            "  [{}/{}] Remuxing {}...",
+            i + 1,
+            total,
+            job.filename.bold()
+        );
+        match remux::remux_lossless(&job.path, &job.keep_indices) {
+            Ok(saved) => {
+                total_saved += saved;
+                successful += 1;
+                println!(
+                    "    {} Stripped {} dubs (reclaimed: {})\n",
+                    "✔".green().bold(),
+                    job.strip_count,
+                    remux::format_bytes(saved).green().bold()
+                );
+            }
+            Err(err) => {
+                eprintln!("    ⚠️ Failed to remux {}: {err}\n", job.filename);
+            }
+        }
+    }
+    (successful, total_saved)
+}
+
 fn handle_sweep(dir: &Path, auto: bool, dry_run: bool) -> Result<()> {
     println!(
         "\n  {} Sweeping directory: {}",
@@ -142,48 +238,32 @@ fn handle_sweep(dir: &Path, auto: bool, dry_run: bool) -> Result<()> {
         dir.display().to_string().bold()
     );
 
-    let mut total_saved = 0u64;
-    let mut processed = 0usize;
-
-    for entry in walk_video_files(dir) {
-        if let Ok(media) = probe::probe_file(&entry) {
-            let origin = ai::resolve_film_origin(&entry)?;
-            let decisions = decide::evaluate_audio_streams(&media, &origin);
-            let strip_count = decisions
-                .iter()
-                .filter(|d| d.action == ui::Action::Strip)
-                .count();
-
-            if strip_count > 0 {
-                ui::render_inspection_table(&media, &origin, &decisions);
-                if !dry_run {
-                    if let Ok(keep_indices) = ui::prompt_confirmation(&decisions, auto) {
-                        if let Ok(saved) = remux::remux_lossless(&entry, &keep_indices) {
-                            total_saved += saved;
-                            processed += 1;
-                        }
-                    }
-                } else {
-                    processed += 1;
-                }
-            }
-        }
+    let jobs = collect_sweep_jobs(dir, auto, dry_run)?;
+    if jobs.is_empty() {
+        println!(
+            "\n  {} No media files with redundant dubs found.\n",
+            "•".dimmed()
+        );
+        return Ok(());
     }
 
     if dry_run {
         println!(
-            "\n  {} [Dry-run] Found {} files with redundant dub tracks.",
+            "\n  {} [Dry-run] Found {} file(s) with redundant dub tracks.\n",
             "✔".green(),
-            processed.to_string().bold()
+            jobs.len().to_string().bold()
         );
-    } else {
-        println!(
-            "\n  {} Swept {} files. Total space reclaimed: {}\n",
-            "✔".green().bold(),
-            processed.to_string().bold(),
-            remux::format_bytes(total_saved).green().bold()
-        );
+        return Ok(());
     }
+
+    let (successful, total_saved) = execute_sweep_jobs(&jobs);
+    println!(
+        "  {} Batch sweep complete! Processed {}/{} files. Total space reclaimed: {}\n",
+        "✔".green().bold(),
+        successful.to_string().bold(),
+        jobs.len(),
+        remux::format_bytes(total_saved).green().bold()
+    );
 
     Ok(())
 }

@@ -70,7 +70,9 @@ pub fn is_file_actively_locked(path: &Path) -> Result<bool> {
             // If neither tool is installed, rely on the remaining 3 safety gates
             Ok(false)
         }
-        Err(err) => Err(err).with_context(|| format!("Failed to check file lock for {}", path.display())),
+        Err(err) => {
+            Err(err).with_context(|| format!("Failed to check file lock for {}", path.display()))
+        }
     }
 }
 
