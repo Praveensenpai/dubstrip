@@ -187,9 +187,13 @@ fn query_gemini_film_origin(
     api_key: &str,
 ) -> Result<FilmOrigin> {
     let client = Client::builder().timeout(Duration::from_secs(15)).build()?;
-    let url = format!(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-    );
+    let preferred = crate::config::get_gemini_model();
+    let candidates = [
+        preferred.as_str(),
+        "gemini-3.5-flash",
+        "gemini-2.5-flash",
+        "gemini-1.5-flash",
+    ];
 
     let prompt = format!(
         "You are an expert film researcher. Identify the single original theatrical language of this movie release:\n\
@@ -205,26 +209,45 @@ fn query_gemini_film_origin(
         "generationConfig": { "response_mime_type": "application/json" }
     });
 
-    let resp = client.post(&url).json(&body).send()?;
-    let text = resp.text()?;
-    let v: serde_json::Value = serde_json::from_str(&text)?;
+    let mut last_err = String::new();
+    for &model in &candidates {
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        );
+        let resp = match client.post(&url).json(&body).send() {
+            Ok(r) if r.status().is_success() => r,
+            Ok(r) => {
+                last_err = format!("Model {model} returned status: {}", r.status());
+                continue;
+            }
+            Err(e) => {
+                last_err = e.to_string();
+                continue;
+            }
+        };
 
-    let candidate_text = v["candidates"][0]["content"]["parts"][0]["text"]
-        .as_str()
-        .unwrap_or("{}");
-    let parsed: serde_json::Value = serde_json::from_str(candidate_text)?;
+        if let Ok(text) = resp.text() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                let candidate_text = v["candidates"][0]["content"]["parts"][0]["text"]
+                    .as_str()
+                    .unwrap_or("{}");
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(candidate_text) {
+                    let code = parsed["language_code"].as_str().unwrap_or("und");
+                    let name = parsed["language_name"].as_str().unwrap_or("Unknown");
+                    let norm = normalize_lang_code(code);
+                    return Ok(FilmOrigin {
+                        title: title.to_string(),
+                        year,
+                        native_lang_code: norm.to_string(),
+                        native_lang_name: name.to_string(),
+                        source: format!("Gemini AI ({model})"),
+                    });
+                }
+            }
+        }
+    }
 
-    let code = parsed["language_code"].as_str().unwrap_or("und");
-    let name = parsed["language_name"].as_str().unwrap_or("Unknown");
-    let norm = normalize_lang_code(code);
-
-    Ok(FilmOrigin {
-        title: title.to_string(),
-        year,
-        native_lang_code: norm.to_string(),
-        native_lang_name: name.to_string(),
-        source: "Gemini AI".to_string(),
-    })
+    anyhow::bail!("Gemini request failed: {last_err}")
 }
 
 fn infer_origin_from_context(title: &str, year: Option<u32>) -> Option<FilmOrigin> {

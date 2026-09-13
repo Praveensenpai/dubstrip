@@ -93,7 +93,7 @@ dubstrip --help
 
 ## 🤖 AI Configuration (Google Gemini)
 
-`dubstrip` utilizes Google Gemini AI (`gemini-2.5-flash`) to disambiguate tricky movie titles across film industries (e.g. distinguishing Kannada *45* from French *45*, or Kannada *Brat* from Polish *Brat*).
+`dubstrip` utilizes Google Gemini AI (`gemini-3.5-flash` with automatic fallback to `gemini-2.5-flash` and `gemini-1.5-flash`) to disambiguate tricky movie titles across film industries (e.g. distinguishing Kannada *45* from French *45*, or Kannada *Brat* from Polish *Brat*).
 
 ### 1. Interactive Auto-Prompt (Zero Config)
 When running `dubstrip` directly in an interactive terminal, if no key is configured, it will prompt you automatically:
@@ -105,17 +105,20 @@ When running `dubstrip` directly in an interactive terminal, if no key is config
 Entering your key saves it to `~/.config/dubstrip/config.toml`. Pressing `Enter` skips without error and relies on stream-validated local heuristics.
 
 ### 2. Manual CLI Configuration
-You can view or update your key at any time:
+You can view or update your key and preferred model at any time:
 ```bash
-# Save persistently to ~/.config/dubstrip/config.toml
+# Save API key persistently to ~/.config/dubstrip/config.toml
 dubstrip config --set-key "YOUR_GEMINI_API_KEY"
+
+# Change preferred Gemini model (default: gemini-3.5-flash)
+dubstrip config --set-model "gemini-3.5-flash"
 
 # Check current configuration status
 dubstrip config
 ```
 
 ### 3. Environment Variable & Ryoiki Auto-Inheritance
-- **Environment Variable**: `export GEMINI_API_KEY="AIzaSy..."`
+- **Environment Variables**: `export GEMINI_API_KEY="AIzaSy..."` and optional `export GEMINI_MODEL="gemini-3.5-flash"`
 - **Ryoiki Auto-Inheritance**: If you have already configured Gemini in `ryoiki`, `dubstrip` detects and inherits it automatically without needing to re-enter it.
 
 ---

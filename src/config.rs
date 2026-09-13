@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DubstripConfig {
     pub gemini_api_key: Option<String>,
+    pub gemini_model: Option<String>,
 }
 
 /// Returns the configuration path ~/.config/dubstrip/config.toml.
@@ -42,6 +43,13 @@ fn parse_toml_config(content: &str) -> DubstripConfig {
                 config.gemini_api_key = Some(clean.to_string());
             }
         }
+        if let Some(rest) = trimmed.strip_prefix("gemini_model") {
+            let key_val = rest.trim_start_matches(|c: char| c == '=' || c.is_whitespace());
+            let clean = key_val.trim_matches('"').trim_matches('\'').trim();
+            if !clean.is_empty() {
+                config.gemini_model = Some(clean.to_string());
+            }
+        }
     }
     config
 }
@@ -56,8 +64,30 @@ pub fn save_config(config: &DubstripConfig) -> Result<()> {
     if let Some(key) = &config.gemini_api_key {
         content.push_str(&format!("gemini_api_key = \"{key}\"\n"));
     }
+    if let Some(model) = &config.gemini_model {
+        content.push_str(&format!("gemini_model = \"{model}\"\n"));
+    }
     fs::write(&path, content).with_context(|| format!("Failed to write {}", path.display()))?;
     Ok(())
+}
+
+/// Resolves the configured or default Gemini model (defaults to gemini-3.5-flash).
+#[must_use]
+pub fn get_gemini_model() -> String {
+    if let Ok(model) = std::env::var("GEMINI_MODEL") {
+        let trimmed = model.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    let cfg = load_config();
+    if let Some(model) = cfg.gemini_model {
+        let trimmed = model.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    "gemini-3.5-flash".to_string()
 }
 
 /// Resolves Gemini API key with priority:
@@ -128,9 +158,8 @@ fn prompt_and_save_key() -> Result<Option<String>> {
     }
 
     let key = trimmed.to_string();
-    let config = DubstripConfig {
-        gemini_api_key: Some(key.clone()),
-    };
+    let mut config = load_config();
+    config.gemini_api_key = Some(key.clone());
     save_config(&config)?;
     println!(
         "  {} Saved Gemini API key to ~/.config/dubstrip/config.toml\n",

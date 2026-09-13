@@ -63,6 +63,10 @@ enum Commands {
         /// Store Gemini API key persistently in ~/.config/dubstrip/config.toml
         #[arg(long)]
         set_key: Option<String>,
+
+        /// Preferred Gemini model (defaults to gemini-3.5-flash)
+        #[arg(long)]
+        set_model: Option<String>,
     },
 }
 
@@ -82,18 +86,22 @@ fn main() -> Result<()> {
             auto,
             dry_run,
         } => handle_sweep(&path, auto, dry_run),
-        Commands::Config { set_key } => handle_config(set_key),
+        Commands::Config { set_key, set_model } => handle_config(set_key, set_model),
     }
 }
 
-fn handle_config(set_key: Option<String>) -> Result<()> {
-    if let Some(key) = set_key {
-        let cfg = config::DubstripConfig {
-            gemini_api_key: Some(key.trim().to_string()),
-        };
+fn handle_config(set_key: Option<String>, set_model: Option<String>) -> Result<()> {
+    if set_key.is_some() || set_model.is_some() {
+        let mut cfg = config::load_config();
+        if let Some(key) = set_key {
+            cfg.gemini_api_key = Some(key.trim().to_string());
+        }
+        if let Some(model) = set_model {
+            cfg.gemini_model = Some(model.trim().to_string());
+        }
         config::save_config(&cfg)?;
         println!(
-            "\n  {} Saved Gemini API key to ~/.config/dubstrip/config.toml\n",
+            "\n  {} Saved configuration to ~/.config/dubstrip/config.toml\n",
             "✔".green().bold()
         );
         return Ok(());
@@ -101,7 +109,7 @@ fn handle_config(set_key: Option<String>) -> Result<()> {
 
     println!("\n  {} DubStrip Configuration Status", "⚙️".cyan().bold());
     println!("  {}", "─".repeat(45).dimmed());
-    let active_key = config::get_or_prompt_gemini_key(true);
+    let active_key = config::get_or_prompt_gemini_key(false);
     if let Some(key) = active_key {
         let masked = if key.len() > 8 {
             format!("{}...{}", &key[..4], &key[key.len() - 4..])
@@ -115,6 +123,8 @@ fn handle_config(set_key: Option<String>) -> Result<()> {
             "Not set (local heuristics only)".dimmed()
         );
     }
+    let model = config::get_gemini_model();
+    println!("  • Gemini Model:   {}", model.cyan());
     println!();
     Ok(())
 }
