@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  check-and-lint:
+    name: Lint, Test & Rules Enforcement
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Code Formatting Check
+        run: cargo fmt --check
+
+      - name: Clippy Strict Lint Gate
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run Tests
+        run: cargo test
+
+      - name: Hard Limit Gate (Lines per file <= 400)
+        run: |
+          find src -name '*.rs' -exec wc -l {} + | grep -v 'total$' | awk '$1 > 400 {print "FAIL: " $0; found=1} END {exit found}'
