@@ -1,10 +1,7 @@
 use anyhow::Result;
 use regex::Regex;
-use reqwest::blocking::Client;
-use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilmOrigin {
@@ -62,9 +59,13 @@ pub fn resolve_film_origin(
         .map_or_else(|| raw_title.clone(), |s| s.to_string_lossy().into_owned());
 
     if let Some(api_key) = crate::config::get_or_prompt_gemini_key(interactive) {
-        if let Ok(origin) =
-            query_gemini_film_origin(&raw_title, year, stream_langs, &raw_name, &api_key)
-        {
+        if let Ok(origin) = crate::gemini::query_gemini_film_origin(
+            &raw_title,
+            year,
+            stream_langs,
+            &raw_name,
+            &api_key,
+        ) {
             return Ok(origin);
         }
     }
@@ -177,77 +178,6 @@ fn score_candidate(
             source: format!("Jellyfin OMDb Cache ({country})"),
         },
     ))
-}
-
-fn query_gemini_film_origin(
-    title: &str,
-    year: Option<u32>,
-    streams: &[String],
-    raw_filename: &str,
-    api_key: &str,
-) -> Result<FilmOrigin> {
-    let client = Client::builder().timeout(Duration::from_secs(15)).build()?;
-    let preferred = crate::config::get_gemini_model();
-    let candidates = [
-        preferred.as_str(),
-        "gemini-3.5-flash",
-        "gemini-2.5-flash",
-        "gemini-1.5-flash",
-    ];
-
-    let prompt = format!(
-        "You are an expert film researcher. Identify the single original theatrical language of this movie release:\n\
-        - Movie Title: \"{title}\"\n\
-        - Release Year: {year:?}\n\
-        - Audio stream languages in file: {streams:?}\n\
-        - Raw release name: \"{raw_filename}\"\n\
-        Return strictly JSON with keys: \"language_code\" (3-letter ISO-639-2 e.g. kan, tel, tam, mal, hin, eng) and \"language_name\" (e.g. Kannada, Telugu, Hindi)."
-    );
-
-    let body = json!({
-        "contents": [{ "parts": [{ "text": prompt }] }],
-        "generationConfig": { "response_mime_type": "application/json" }
-    });
-
-    let mut last_err = String::new();
-    for &model in &candidates {
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-        );
-        let resp = match client.post(&url).json(&body).send() {
-            Ok(r) if r.status().is_success() => r,
-            Ok(r) => {
-                last_err = format!("Model {model} returned status: {}", r.status());
-                continue;
-            }
-            Err(e) => {
-                last_err = e.to_string();
-                continue;
-            }
-        };
-
-        if let Ok(text) = resp.text() {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                let candidate_text = v["candidates"][0]["content"]["parts"][0]["text"]
-                    .as_str()
-                    .unwrap_or("{}");
-                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(candidate_text) {
-                    let code = parsed["language_code"].as_str().unwrap_or("und");
-                    let name = parsed["language_name"].as_str().unwrap_or("Unknown");
-                    let norm = normalize_lang_code(code);
-                    return Ok(FilmOrigin {
-                        title: title.to_string(),
-                        year,
-                        native_lang_code: norm.to_string(),
-                        native_lang_name: name.to_string(),
-                        source: format!("Gemini AI ({model})"),
-                    });
-                }
-            }
-        }
-    }
-
-    anyhow::bail!("Gemini request failed: {last_err}")
 }
 
 fn infer_origin_from_context(title: &str, year: Option<u32>) -> Option<FilmOrigin> {

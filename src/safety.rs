@@ -9,8 +9,10 @@ const INCOMPLETE_EXTENSIONS: &[&str] =
     &["!qb", "part", "crdownload", "tmp", "downloading", "aria2"];
 
 /// Verifies whether a video file is safe and complete to process.
-/// Enforces 4 sequential safety gates to prevent touching downloading/copying files.
-pub fn is_file_safe_and_complete(path: &Path) -> Result<bool> {
+/// Enforces safety gates to prevent touching downloading/copying files.
+/// When `bypass_quiescence` is true, skips the 60s settling timer while still
+/// validating open write locks, container index, and incomplete extensions.
+pub fn is_file_safe_and_complete(path: &Path, bypass_quiescence: bool) -> Result<bool> {
     if !passes_name_and_path_check(path) {
         return Ok(false);
     }
@@ -19,7 +21,7 @@ pub fn is_file_safe_and_complete(path: &Path) -> Result<bool> {
         return Ok(false);
     }
 
-    if !passes_quiescence_window(path)? {
+    if !bypass_quiescence && !passes_quiescence_window(path)? {
         return Ok(false);
     }
 

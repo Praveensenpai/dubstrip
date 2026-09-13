@@ -1,6 +1,7 @@
 mod ai;
 mod config;
 mod decide;
+mod gemini;
 mod probe;
 mod remux;
 mod safety;
@@ -144,7 +145,7 @@ fn handle_inspect(path: &Path) -> Result<()> {
 }
 
 fn handle_strip(path: &Path, auto: bool, dry_run: bool, force: bool) -> Result<()> {
-    if !force && !safety::is_file_safe_and_complete(path)? {
+    if !safety::is_file_safe_and_complete(path, force)? {
         println!(
             "  {} Skipping {}: File is downloading, active, or incomplete.",
             "⏳".yellow(),
