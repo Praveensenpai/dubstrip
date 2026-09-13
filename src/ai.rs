@@ -1,7 +1,10 @@
 use anyhow::Result;
 use regex::Regex;
+use reqwest::blocking::Client;
+use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilmOrigin {
@@ -31,26 +34,51 @@ pub fn normalize_lang_code(code: &str) -> &'static str {
         "de" | "deu" | "ger" | "german" => "ger",
         "it" | "ita" | "italian" => "ita",
         "zh" | "zho" | "chi" | "chinese" => "chi",
+        "pl" | "pol" | "polish" => "pol",
         _ => "und",
     }
 }
 
-/// Resolves the movie's native theatrical origin language.
-/// Uses 3 tiers: Local Jellyfin cache -> Release filename context -> Fallback.
-pub fn resolve_film_origin(path: &Path) -> Result<FilmOrigin> {
+/// Resolves the movie's native theatrical origin language using 4 intelligent tiers:
+/// 1. Stream-validated local Jellyfin OMDb cache
+/// 2. Google Gemini AI (with interactive key prompt if missing)
+/// 3. Release context & film industry disambiguation
+/// 4. Container stream consistency fallback
+pub fn resolve_film_origin(
+    path: &Path,
+    stream_langs: &[String],
+    interactive: bool,
+) -> Result<FilmOrigin> {
     let (raw_title, year) = parse_title_and_year(path);
 
-    // Tier 1: Check local Jellyfin metadata cache (~/jellyfin/cache/omdb/)
-    if let Some(origin) = search_local_jellyfin_cache(&raw_title, year) {
+    // Tier 1: Local Jellyfin OMDb cache with audio stream cross-validation
+    if let Some(origin) = search_local_jellyfin_cache(&raw_title, year, stream_langs) {
         return Ok(origin);
     }
 
-    // Tier 2: Check context from release groups & known titles
+    // Tier 2: Google Gemini AI (checks env, config, ryoiki, or prompts user)
+    let raw_name = path
+        .file_name()
+        .map_or_else(|| raw_title.clone(), |s| s.to_string_lossy().into_owned());
+
+    if let Some(api_key) = crate::config::get_or_prompt_gemini_key(interactive) {
+        if let Ok(origin) =
+            query_gemini_film_origin(&raw_title, year, stream_langs, &raw_name, &api_key)
+        {
+            return Ok(origin);
+        }
+    }
+
+    // Tier 3: Contextual industry knowledge table
     if let Some(origin) = infer_origin_from_context(&raw_title, year) {
         return Ok(origin);
     }
 
-    // Tier 3: Default fallback
+    // Tier 4: Fallback to single non-und audio stream if all match
+    if let Some(origin) = infer_origin_from_streams(&raw_title, year, stream_langs) {
+        return Ok(origin);
+    }
+
     Ok(FilmOrigin {
         title: raw_title,
         year,
@@ -60,6 +88,210 @@ pub fn resolve_film_origin(path: &Path) -> Result<FilmOrigin> {
     })
 }
 
+/// Searches local Jellyfin OMDb cache and cross-validates against actual stream languages.
+fn search_local_jellyfin_cache(
+    title: &str,
+    year: Option<u32>,
+    stream_langs: &[String],
+) -> Option<FilmOrigin> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    let cache_dir = PathBuf::from(home).join("jellyfin/cache/omdb");
+    if !cache_dir.exists() {
+        return None;
+    }
+
+    let entries = fs::read_dir(cache_dir).ok()?.flatten();
+    let mut best_match: Option<(i32, FilmOrigin)> = None;
+
+    for entry in entries {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "json") {
+            if let Ok(content) = fs::read_to_string(&path) {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                    if let Some((score, origin)) = score_candidate(&json, title, year, stream_langs)
+                    {
+                        if score > best_match.as_ref().map_or(-999, |(s, _)| *s) {
+                            best_match = Some((score, origin));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    best_match.and_then(|(score, origin)| if score > 0 { Some(origin) } else { None })
+}
+
+fn score_candidate(
+    json: &serde_json::Value,
+    title: &str,
+    year: Option<u32>,
+    stream_langs: &[String],
+) -> Option<(i32, FilmOrigin)> {
+    let cached_title = json.get("Title").and_then(|v| v.as_str())?;
+    let cached_year = json.get("Year").and_then(|v| v.as_str());
+
+    if !cached_title.eq_ignore_ascii_case(title) {
+        return None;
+    }
+
+    let year_matches = match (year, cached_year) {
+        (Some(y), Some(cy)) => cy.contains(&y.to_string()),
+        _ => true,
+    };
+    if !year_matches {
+        return None;
+    }
+
+    let lang_str = json.get("Language").and_then(|v| v.as_str())?;
+    let first_lang = lang_str.split(',').next()?.trim();
+    let norm = normalize_lang_code(first_lang);
+
+    let mut score = 10;
+    let country = json.get("Country").and_then(|v| v.as_str()).unwrap_or("");
+
+    // Stream cross-validation: does the file actually contain this language?
+    let lang_in_streams = stream_langs.iter().any(|s| {
+        let normalized = normalize_lang_code(s);
+        normalized == norm || s.eq_ignore_ascii_case(norm)
+    });
+
+    if lang_in_streams {
+        score += 100;
+    } else if !stream_langs.is_empty() {
+        // Penalty: cache entry language has 0 matching audio streams in the file
+        score -= 100;
+    }
+
+    if country.contains("India") {
+        score += 20;
+    }
+
+    Some((
+        score,
+        FilmOrigin {
+            title: cached_title.to_string(),
+            year,
+            native_lang_code: norm.to_string(),
+            native_lang_name: first_lang.to_string(),
+            source: format!("Jellyfin OMDb Cache ({country})"),
+        },
+    ))
+}
+
+fn query_gemini_film_origin(
+    title: &str,
+    year: Option<u32>,
+    streams: &[String],
+    raw_filename: &str,
+    api_key: &str,
+) -> Result<FilmOrigin> {
+    let client = Client::builder().timeout(Duration::from_secs(15)).build()?;
+    let url = format!(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    );
+
+    let prompt = format!(
+        "You are an expert film researcher. Identify the single original theatrical language of this movie release:\n\
+        - Movie Title: \"{title}\"\n\
+        - Release Year: {year:?}\n\
+        - Audio stream languages in file: {streams:?}\n\
+        - Raw release name: \"{raw_filename}\"\n\
+        Return strictly JSON with keys: \"language_code\" (3-letter ISO-639-2 e.g. kan, tel, tam, mal, hin, eng) and \"language_name\" (e.g. Kannada, Telugu, Hindi)."
+    );
+
+    let body = json!({
+        "contents": [{ "parts": [{ "text": prompt }] }],
+        "generationConfig": { "response_mime_type": "application/json" }
+    });
+
+    let resp = client.post(&url).json(&body).send()?;
+    let text = resp.text()?;
+    let v: serde_json::Value = serde_json::from_str(&text)?;
+
+    let candidate_text = v["candidates"][0]["content"]["parts"][0]["text"]
+        .as_str()
+        .unwrap_or("{}");
+    let parsed: serde_json::Value = serde_json::from_str(candidate_text)?;
+
+    let code = parsed["language_code"].as_str().unwrap_or("und");
+    let name = parsed["language_name"].as_str().unwrap_or("Unknown");
+    let norm = normalize_lang_code(code);
+
+    Ok(FilmOrigin {
+        title: title.to_string(),
+        year,
+        native_lang_code: norm.to_string(),
+        native_lang_name: name.to_string(),
+        source: "Gemini AI".to_string(),
+    })
+}
+
+fn infer_origin_from_context(title: &str, year: Option<u32>) -> Option<FilmOrigin> {
+    let lower = title.to_lowercase();
+    if lower == "45" {
+        return Some(FilmOrigin {
+            title: "45".to_string(),
+            year,
+            native_lang_code: "kan".to_string(),
+            native_lang_name: "Kannada".to_string(),
+            source: "Context Knowledge".to_string(),
+        });
+    }
+    if lower == "brat" {
+        return Some(FilmOrigin {
+            title: "Brat".to_string(),
+            year,
+            native_lang_code: "kan".to_string(),
+            native_lang_name: "Kannada".to_string(),
+            source: "Context Knowledge".to_string(),
+        });
+    }
+    if lower.contains("they call him og") || lower == "og" {
+        return Some(FilmOrigin {
+            title: "They Call Him OG".to_string(),
+            year,
+            native_lang_code: "tel".to_string(),
+            native_lang_name: "Telugu".to_string(),
+            source: "Context Knowledge".to_string(),
+        });
+    }
+    if lower.contains("chhaava") {
+        return Some(FilmOrigin {
+            title: "Chhaava".to_string(),
+            year,
+            native_lang_code: "hin".to_string(),
+            native_lang_name: "Hindi".to_string(),
+            source: "Context Knowledge".to_string(),
+        });
+    }
+    None
+}
+
+fn infer_origin_from_streams(
+    title: &str,
+    year: Option<u32>,
+    streams: &[String],
+) -> Option<FilmOrigin> {
+    if streams.is_empty() {
+        return None;
+    }
+    let first = normalize_lang_code(&streams[0]);
+    if first == "und" {
+        return None;
+    }
+    if streams.iter().all(|s| normalize_lang_code(s) == first) {
+        return Some(FilmOrigin {
+            title: title.to_string(),
+            year,
+            native_lang_code: first.to_string(),
+            native_lang_name: streams[0].clone(),
+            source: "Container Stream Consensus".to_string(),
+        });
+    }
+    None
+}
+
 /// Parses a clean movie title and optional release year from path.
 pub fn parse_title_and_year(path: &Path) -> (String, Option<u32>) {
     let filename = path.file_stem().map_or_else(
@@ -67,11 +299,12 @@ pub fn parse_title_and_year(path: &Path) -> (String, Option<u32>) {
         |s| s.to_string_lossy().into_owned(),
     );
 
-    // Clean common release junk: [1TamilMV.day], www.1TamilMV.day -, etc.
     let cleaned = filename
         .replace("[1TamilMV.day]", "")
         .replace("www.1TamilMV.day -", "")
         .replace("www.1TamilMV.day", "")
+        .replace("www.1TamilMV.pink -", "")
+        .replace("www.1TamilMV.pink", "")
         .replace("1TamilMV", "")
         .replace("TamilBlasters", "");
 
@@ -95,89 +328,6 @@ pub fn parse_title_and_year(path: &Path) -> (String, Option<u32>) {
         .to_string();
 
     (title, year)
-}
-
-/// Searches local Jellyfin OMDb cache files for matching title and year.
-fn search_local_jellyfin_cache(title: &str, year: Option<u32>) -> Option<FilmOrigin> {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
-    let cache_dir = PathBuf::from(home).join("jellyfin/cache/omdb");
-
-    if !cache_dir.exists() {
-        return None;
-    }
-
-    let entries = fs::read_dir(cache_dir).ok()?.flatten();
-    for entry in entries {
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "json") {
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                    let cached_title = json.get("Title").and_then(|v| v.as_str())?;
-                    let cached_year = json.get("Year").and_then(|v| v.as_str());
-
-                    let title_matches = cached_title.eq_ignore_ascii_case(title);
-                    let year_matches = match (year, cached_year) {
-                        (Some(y), Some(cy)) => cy.contains(&y.to_string()),
-                        _ => true,
-                    };
-
-                    if title_matches && year_matches {
-                        if let Some(lang_str) = json.get("Language").and_then(|v| v.as_str()) {
-                            let first_lang = lang_str.split(',').next()?.trim();
-                            let norm = normalize_lang_code(first_lang);
-                            return Some(FilmOrigin {
-                                title: cached_title.to_string(),
-                                year,
-                                native_lang_code: norm.to_string(),
-                                native_lang_name: first_lang.to_string(),
-                                source: "Jellyfin OMDb Cache".to_string(),
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    None
-}
-
-/// Contextual and film industry disambiguation for known titles.
-fn infer_origin_from_context(title: &str, year: Option<u32>) -> Option<FilmOrigin> {
-    let lower = title.to_lowercase();
-
-    // Specific Indian cinema disambiguation overrides (where TMDB mislabels)
-    if lower == "45" {
-        return Some(FilmOrigin {
-            title: "45".to_string(),
-            year,
-            native_lang_code: "kan".to_string(),
-            native_lang_name: "Kannada".to_string(),
-            source: "Context Resolver".to_string(),
-        });
-    }
-
-    if lower.contains("they call him og") || lower == "og" {
-        return Some(FilmOrigin {
-            title: "They Call Him OG".to_string(),
-            year,
-            native_lang_code: "tel".to_string(),
-            native_lang_name: "Telugu".to_string(),
-            source: "Context Resolver".to_string(),
-        });
-    }
-
-    if lower.contains("chhaava") {
-        return Some(FilmOrigin {
-            title: "Chhaava".to_string(),
-            year,
-            native_lang_code: "hin".to_string(),
-            native_lang_name: "Hindi".to_string(),
-            source: "Context Resolver".to_string(),
-        });
-    }
-
-    None
 }
 
 #[cfg(test)]

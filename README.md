@@ -91,6 +91,35 @@ dubstrip --help
 
 ---
 
+## 🤖 AI Configuration (Google Gemini)
+
+`dubstrip` utilizes Google Gemini AI (`gemini-2.5-flash`) to disambiguate tricky movie titles across film industries (e.g. distinguishing Kannada *45* from French *45*, or Kannada *Brat* from Polish *Brat*).
+
+### 1. Interactive Auto-Prompt (Zero Config)
+When running `dubstrip` directly in an interactive terminal, if no key is configured, it will prompt you automatically:
+```text
+  🤖 Gemini AI: Enhances movie theatrical origin disambiguation.
+     Get a free key at: https://aistudio.google.com/
+  Enter Gemini API Key [press Enter to skip]: 
+```
+Entering your key saves it to `~/.config/dubstrip/config.toml`. Pressing `Enter` skips without error and relies on stream-validated local heuristics.
+
+### 2. Manual CLI Configuration
+You can view or update your key at any time:
+```bash
+# Save persistently to ~/.config/dubstrip/config.toml
+dubstrip config --set-key "YOUR_GEMINI_API_KEY"
+
+# Check current configuration status
+dubstrip config
+```
+
+### 3. Environment Variable & Ryoiki Auto-Inheritance
+- **Environment Variable**: `export GEMINI_API_KEY="AIzaSy..."`
+- **Ryoiki Auto-Inheritance**: If you have already configured Gemini in `ryoiki`, `dubstrip` detects and inherits it automatically without needing to re-enter it.
+
+---
+
 ## 💻 CLI Usage & Workflows
 
 ### 1. Non-Destructive Stream Inspection

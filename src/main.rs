@@ -1,4 +1,5 @@
 mod ai;
+mod config;
 mod decide;
 mod probe;
 mod remux;
@@ -57,6 +58,12 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Configure Google Gemini API key and persistent settings
+    Config {
+        /// Store Gemini API key persistently in ~/.config/dubstrip/config.toml
+        #[arg(long)]
+        set_key: Option<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -75,12 +82,51 @@ fn main() -> Result<()> {
             auto,
             dry_run,
         } => handle_sweep(&path, auto, dry_run),
+        Commands::Config { set_key } => handle_config(set_key),
     }
+}
+
+fn handle_config(set_key: Option<String>) -> Result<()> {
+    if let Some(key) = set_key {
+        let cfg = config::DubstripConfig {
+            gemini_api_key: Some(key.trim().to_string()),
+        };
+        config::save_config(&cfg)?;
+        println!(
+            "\n  {} Saved Gemini API key to ~/.config/dubstrip/config.toml\n",
+            "✔".green().bold()
+        );
+        return Ok(());
+    }
+
+    println!("\n  {} DubStrip Configuration Status", "⚙️".cyan().bold());
+    println!("  {}", "─".repeat(45).dimmed());
+    let active_key = config::get_or_prompt_gemini_key(true);
+    if let Some(key) = active_key {
+        let masked = if key.len() > 8 {
+            format!("{}...{}", &key[..4], &key[key.len() - 4..])
+        } else {
+            "****".to_string()
+        };
+        println!("  • Gemini API Key: {}", masked.green());
+    } else {
+        println!(
+            "  • Gemini API Key: {}",
+            "Not set (local heuristics only)".dimmed()
+        );
+    }
+    println!();
+    Ok(())
 }
 
 fn handle_inspect(path: &Path) -> Result<()> {
     let media = probe::probe_file(path)?;
-    let origin = ai::resolve_film_origin(path)?;
+    let stream_langs: Vec<String> = media
+        .audio_streams
+        .iter()
+        .map(|s| s.language.clone())
+        .collect();
+    let origin = ai::resolve_film_origin(path, &stream_langs, true)?;
     let decisions = decide::evaluate_audio_streams(&media, &origin);
 
     ui::render_inspection_table(&media, &origin, &decisions);
@@ -98,7 +144,12 @@ fn handle_strip(path: &Path, auto: bool, dry_run: bool, force: bool) -> Result<(
     }
 
     let media = probe::probe_file(path)?;
-    let origin = ai::resolve_film_origin(path)?;
+    let stream_langs: Vec<String> = media
+        .audio_streams
+        .iter()
+        .map(|s| s.language.clone())
+        .collect();
+    let origin = ai::resolve_film_origin(path, &stream_langs, !auto)?;
     let decisions = decide::evaluate_audio_streams(&media, &origin);
 
     ui::render_inspection_table(&media, &origin, &decisions);
@@ -157,7 +208,12 @@ fn collect_sweep_jobs(dir: &Path, auto: bool, dry_run: bool) -> Result<Vec<Sweep
         let Ok(media) = probe::probe_file(&entry) else {
             continue;
         };
-        let origin = ai::resolve_film_origin(&entry)?;
+        let stream_langs: Vec<String> = media
+            .audio_streams
+            .iter()
+            .map(|s| s.language.clone())
+            .collect();
+        let origin = ai::resolve_film_origin(&entry, &stream_langs, !auto)?;
         let decisions = decide::evaluate_audio_streams(&media, &origin);
         let strip_count = decisions
             .iter()
