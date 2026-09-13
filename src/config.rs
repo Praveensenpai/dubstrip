@@ -87,7 +87,7 @@ pub fn get_gemini_model() -> String {
             return trimmed.to_string();
         }
     }
-    "gemini-3.5-flash".to_string()
+    "gemini-3.6-flash".to_string()
 }
 
 /// Resolves Gemini API key with priority:

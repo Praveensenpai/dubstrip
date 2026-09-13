@@ -66,7 +66,7 @@ enum Commands {
         #[arg(long)]
         set_key: Option<String>,
 
-        /// Preferred Gemini model (defaults to gemini-3.5-flash)
+        /// Preferred Gemini model (defaults to gemini-3.6-flash)
         #[arg(long)]
         set_model: Option<String>,
     },

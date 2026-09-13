@@ -18,9 +18,8 @@ pub fn query_gemini_film_origin(
     let preferred = crate::config::get_gemini_model();
     let candidates = [
         preferred.as_str(),
-        "gemini-3.5-flash",
-        "gemini-2.5-flash",
-        "gemini-1.5-flash",
+        "gemini-3.6-flash",
+        "gemini-flash-latest",
     ];
 
     let prompt = build_prompt(title, year, streams, raw_filename);
