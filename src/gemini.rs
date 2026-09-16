@@ -52,13 +52,19 @@ pub fn query_gemini_film_origin(
     anyhow::bail!("Gemini request failed: {last_err}")
 }
 
+fn sanitize_filename_for_prompt(raw: &str) -> String {
+    let re = regex::Regex::new(r"(?i)www\.\d*(tamilmv|tamilblasters|tamilrockers|desiscenics|1tamilmv)\.[a-z]+|1tamilmv|tamilblasters|tamilrockers").unwrap_or_else(|_| regex::Regex::new("$^").expect("fallback"));
+    re.replace_all(raw, "").trim().to_string()
+}
+
 fn build_prompt(title: &str, year: Option<u32>, streams: &[String], raw_filename: &str) -> String {
+    let clean_raw = sanitize_filename_for_prompt(raw_filename);
     format!(
         "You are an expert film researcher. Identify the single original theatrical language of this movie release:\n\
         - Movie Title: \"{title}\"\n\
         - Release Year: {year:?}\n\
         - Audio stream languages in file: {streams:?}\n\
-        - Raw release name: \"{raw_filename}\"\n\
+        - Raw release name: \"{clean_raw}\"\n\
         Return strictly JSON with keys: \"language_code\" (3-letter ISO-639-2 e.g. kan, tel, tam, mal, hin, eng) and \"language_name\" (e.g. Kannada, Telugu, Hindi)."
     )
 }

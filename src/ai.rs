@@ -2,6 +2,7 @@ use anyhow::Result;
 use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FilmOrigin {
@@ -36,11 +37,12 @@ pub fn normalize_lang_code(code: &str) -> &'static str {
     }
 }
 
-/// Resolves the movie's native theatrical origin language using 4 intelligent tiers:
+/// Resolves the movie's native theatrical origin language using 5 intelligent tiers:
 /// 1. Stream-validated local Jellyfin OMDb cache
-/// 2. Google Gemini AI (with interactive key prompt if missing)
+/// 2. Deterministic Wikipedia REST API lookup
 /// 3. Release context & film industry disambiguation
-/// 4. Container stream consistency fallback
+/// 4. Google Gemini AI (with interactive key prompt if missing)
+/// 5. Container stream consistency fallback
 pub fn resolve_film_origin(
     path: &Path,
     stream_langs: &[String],
@@ -53,7 +55,17 @@ pub fn resolve_film_origin(
         return Ok(origin);
     }
 
-    // Tier 2: Google Gemini AI (checks env, config, ryoiki, or prompts user)
+    // Tier 2: Deterministic Wikipedia REST API lookup
+    if let Some(origin) = query_wikipedia_film_origin(&raw_title, year, stream_langs) {
+        return Ok(origin);
+    }
+
+    // Tier 3: Contextual industry knowledge table
+    if let Some(origin) = infer_origin_from_context(&raw_title, year) {
+        return Ok(origin);
+    }
+
+    // Tier 4: Google Gemini AI (checks env, config, ryoiki, or prompts user)
     let raw_name = path
         .file_name()
         .map_or_else(|| raw_title.clone(), |s| s.to_string_lossy().into_owned());
@@ -70,12 +82,7 @@ pub fn resolve_film_origin(
         }
     }
 
-    // Tier 3: Contextual industry knowledge table
-    if let Some(origin) = infer_origin_from_context(&raw_title, year) {
-        return Ok(origin);
-    }
-
-    // Tier 4: Fallback to single non-und audio stream if all match
+    // Tier 5: Fallback to single non-und audio stream if all match
     if let Some(origin) = infer_origin_from_streams(&raw_title, year, stream_langs) {
         return Ok(origin);
     }
@@ -180,6 +187,92 @@ fn score_candidate(
     ))
 }
 
+fn query_wikipedia_film_origin(
+    title: &str,
+    year: Option<u32>,
+    stream_langs: &[String],
+) -> Option<FilmOrigin> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(4))
+        .user_agent("dubstrip/1.0")
+        .build()
+        .ok()?;
+
+    let queries = [
+        year.map(|y| format!("{title} {y} film")),
+        year.map(|y| format!("{title} {} film", y.saturating_sub(1))),
+        Some(format!("{title} film")),
+    ];
+
+    for query in queries.into_iter().flatten() {
+        let search_url = format!(
+            "https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch={}&format=json",
+            query.replace(' ', "+")
+        );
+
+        let Ok(resp) = client.get(&search_url).send() else {
+            continue;
+        };
+        let Ok(json) = resp.json::<serde_json::Value>() else {
+            continue;
+        };
+        let Some(results) = json["query"]["search"].as_array() else {
+            continue;
+        };
+
+        for item in results.iter().take(3) {
+            let Some(page_title) = item["title"].as_str() else {
+                continue;
+            };
+            let summary_url = format!(
+                "https://en.wikipedia.org/api/rest_v1/page/summary/{}",
+                page_title.replace(' ', "_")
+            );
+
+            let Ok(s_resp) = client.get(&summary_url).send() else {
+                continue;
+            };
+            let Ok(s_json) = s_resp.json::<serde_json::Value>() else {
+                continue;
+            };
+            let extract = s_json["extract"].as_str().unwrap_or("");
+
+            let langs = [
+                ("Kannada", "kan"),
+                ("Tamil", "tam"),
+                ("Telugu", "tel"),
+                ("Malayalam", "mal"),
+                ("Hindi", "hin"),
+                ("English", "eng"),
+            ];
+
+            for (lang_name, lang_code) in langs {
+                if extract.contains(&format!("{lang_name}-language"))
+                    || extract.contains(&format!("{lang_name} language"))
+                {
+                    let stream_matched = stream_langs.is_empty()
+                        || stream_langs.iter().any(|s| {
+                            let norm = normalize_lang_code(s);
+                            norm == lang_code || s.eq_ignore_ascii_case(lang_code)
+                        });
+
+                    if stream_matched {
+                        return Some(FilmOrigin {
+                            title: title.to_string(),
+                            year,
+                            native_lang_code: lang_code.to_string(),
+                            native_lang_name: lang_name.to_string(),
+                            source: "Wikipedia API".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
 fn infer_origin_from_context(title: &str, year: Option<u32>) -> Option<FilmOrigin> {
     let lower = title.to_lowercase();
     if lower == "45" {
@@ -191,9 +284,9 @@ fn infer_origin_from_context(title: &str, year: Option<u32>) -> Option<FilmOrigi
             source: "Context Knowledge".to_string(),
         });
     }
-    if lower == "brat" {
+    if lower == "brat" || lower == "mark" {
         return Some(FilmOrigin {
-            title: "Brat".to_string(),
+            title: if lower == "mark" { "Mark".to_string() } else { "Brat".to_string() },
             year,
             native_lang_code: "kan".to_string(),
             native_lang_name: "Kannada".to_string(),
