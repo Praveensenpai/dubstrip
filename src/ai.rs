@@ -257,12 +257,20 @@ fn query_wikipedia_film_origin(
 
 fn infer_origin_from_context(title: &str, year: Option<u32>) -> Option<FilmOrigin> {
     let lower = title.to_lowercase();
-    if lower == "45" || lower == "brat" || lower == "mark" || lower.contains("mahavatar narsimha") {
+    if lower.contains("mahavatar narsimha") {
+        return Some(FilmOrigin {
+            title: "Mahavatar Narsimha".to_string(),
+            year,
+            native_lang_code: "hin".to_string(),
+            native_lang_name: "Hindi".to_string(),
+            source: "Context Knowledge".to_string(),
+        });
+    }
+    if lower == "45" || lower == "brat" || lower == "mark" {
         let (t, code, name) = match lower.as_str() {
             "45" => ("45", "kan", "Kannada"),
             "brat" => ("Brat", "kan", "Kannada"),
-            "mark" => ("Mark", "kan", "Kannada"),
-            _ => ("Mahavatar Narsimha", "kan", "Kannada"),
+            _ => ("Mark", "kan", "Kannada"),
         };
         return Some(FilmOrigin {
             title: t.to_string(),
