@@ -13,11 +13,9 @@ pub struct FilmOrigin {
     pub source: String,
 }
 
-/// Normalizes 2-letter or 3-letter language codes to standard 3-letter ISO-639-2.
 #[must_use]
 pub fn normalize_lang_code(code: &str) -> &'static str {
-    let lower = code.trim().to_lowercase();
-    match lower.as_str() {
+    match code.trim().to_lowercase().as_str() {
         "kn" | "kan" | "kannada" => "kan",
         "te" | "tel" | "telugu" => "tel",
         "ta" | "tam" | "tamil" => "tam",
@@ -37,12 +35,6 @@ pub fn normalize_lang_code(code: &str) -> &'static str {
     }
 }
 
-/// Resolves the movie's native theatrical origin language using 5 intelligent tiers:
-/// 1. Stream-validated local Jellyfin OMDb cache
-/// 2. Deterministic Wikipedia REST API lookup
-/// 3. Release context & film industry disambiguation
-/// 4. Google Gemini AI (with interactive key prompt if missing)
-/// 5. Container stream consistency fallback
 pub fn resolve_film_origin(
     path: &Path,
     stream_langs: &[String],
@@ -50,22 +42,16 @@ pub fn resolve_film_origin(
 ) -> Result<FilmOrigin> {
     let (raw_title, year) = parse_title_and_year(path);
 
-    // Tier 1: Local Jellyfin OMDb cache with audio stream cross-validation
     if let Some(origin) = search_local_jellyfin_cache(&raw_title, year, stream_langs) {
         return Ok(origin);
     }
-
-    // Tier 2: Deterministic Wikipedia REST API lookup
     if let Some(origin) = query_wikipedia_film_origin(&raw_title, year, stream_langs) {
         return Ok(origin);
     }
-
-    // Tier 3: Contextual industry knowledge table
     if let Some(origin) = infer_origin_from_context(&raw_title, year) {
         return Ok(origin);
     }
 
-    // Tier 4: Google Gemini AI (checks env, config, ryoiki, or prompts user)
     let raw_name = path
         .file_name()
         .map_or_else(|| raw_title.clone(), |s| s.to_string_lossy().into_owned());
@@ -82,7 +68,6 @@ pub fn resolve_film_origin(
         }
     }
 
-    // Tier 5: Fallback to single non-und audio stream if all match
     if let Some(origin) = infer_origin_from_streams(&raw_title, year, stream_langs) {
         return Ok(origin);
     }
@@ -96,7 +81,6 @@ pub fn resolve_film_origin(
     })
 }
 
-/// Searches local Jellyfin OMDb cache and cross-validates against actual stream languages.
 fn search_local_jellyfin_cache(
     title: &str,
     year: Option<u32>,
@@ -112,9 +96,9 @@ fn search_local_jellyfin_cache(
     let mut best_match: Option<(i32, FilmOrigin)> = None;
 
     for entry in entries {
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "json") {
-            if let Ok(content) = fs::read_to_string(&path) {
+        let p = entry.path();
+        if p.extension().is_some_and(|ext| ext == "json") {
+            if let Ok(content) = fs::read_to_string(&p) {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
                     if let Some((score, origin)) = score_candidate(&json, title, year, stream_langs)
                     {
@@ -158,7 +142,6 @@ fn score_candidate(
     let mut score = 10;
     let country = json.get("Country").and_then(|v| v.as_str()).unwrap_or("");
 
-    // Stream cross-validation: does the file actually contain this language?
     let lang_in_streams = stream_langs.iter().any(|s| {
         let normalized = normalize_lang_code(s);
         normalized == norm || s.eq_ignore_ascii_case(norm)
@@ -167,7 +150,6 @@ fn score_candidate(
     if lang_in_streams {
         score += 100;
     } else if !stream_langs.is_empty() {
-        // Penalty: cache entry language has 0 matching audio streams in the file
         score -= 100;
     }
 
@@ -275,25 +257,18 @@ fn query_wikipedia_film_origin(
 
 fn infer_origin_from_context(title: &str, year: Option<u32>) -> Option<FilmOrigin> {
     let lower = title.to_lowercase();
-    if lower == "45" {
+    if lower == "45" || lower == "brat" || lower == "mark" || lower.contains("mahavatar narsimha") {
+        let (t, code, name) = match lower.as_str() {
+            "45" => ("45", "kan", "Kannada"),
+            "brat" => ("Brat", "kan", "Kannada"),
+            "mark" => ("Mark", "kan", "Kannada"),
+            _ => ("Mahavatar Narsimha", "kan", "Kannada"),
+        };
         return Some(FilmOrigin {
-            title: "45".to_string(),
+            title: t.to_string(),
             year,
-            native_lang_code: "kan".to_string(),
-            native_lang_name: "Kannada".to_string(),
-            source: "Context Knowledge".to_string(),
-        });
-    }
-    if lower == "brat" || lower == "mark" {
-        return Some(FilmOrigin {
-            title: if lower == "mark" {
-                "Mark".to_string()
-            } else {
-                "Brat".to_string()
-            },
-            year,
-            native_lang_code: "kan".to_string(),
-            native_lang_name: "Kannada".to_string(),
+            native_lang_code: code.to_string(),
+            native_lang_name: name.to_string(),
             source: "Context Knowledge".to_string(),
         });
     }
@@ -342,7 +317,6 @@ fn infer_origin_from_streams(
     None
 }
 
-/// Parses a clean movie title and optional release year from path.
 pub fn parse_title_and_year(path: &Path) -> (String, Option<u32>) {
     let filename = path.file_stem().map_or_else(
         || "Unknown".to_string(),
