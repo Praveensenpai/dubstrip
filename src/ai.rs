@@ -286,7 +286,11 @@ fn infer_origin_from_context(title: &str, year: Option<u32>) -> Option<FilmOrigi
     }
     if lower == "brat" || lower == "mark" {
         return Some(FilmOrigin {
-            title: if lower == "mark" { "Mark".to_string() } else { "Brat".to_string() },
+            title: if lower == "mark" {
+                "Mark".to_string()
+            } else {
+                "Brat".to_string()
+            },
             year,
             native_lang_code: "kan".to_string(),
             native_lang_name: "Kannada".to_string(),
