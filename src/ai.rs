@@ -169,6 +169,40 @@ fn score_candidate(
     ))
 }
 
+fn map_wikidata_qid(qid: &str) -> Option<(&'static str, &'static str)> {
+    match qid {
+        "Q1568" => Some(("Hindi", "hin")),
+        "Q36186" => Some(("Kannada", "kan")),
+        "Q5885" => Some(("Tamil", "tam")),
+        "Q8097" => Some(("Telugu", "tel")),
+        "Q36236" => Some(("Malayalam", "mal")),
+        "Q1860" => Some(("English", "eng")),
+        "Q5287" => Some(("Japanese", "jpn")),
+        "Q7026" => Some(("Korean", "kor")),
+        "Q1362" => Some(("Spanish", "spa")),
+        "Q150" => Some(("French", "fre")),
+        "Q7737" => Some(("Russian", "rus")),
+        "Q188" => Some(("German", "ger")),
+        "Q652" => Some(("Italian", "ita")),
+        "Q9610" => Some(("Bengali", "ben")),
+        "Q1571" => Some(("Marathi", "mar")),
+        "Q5146" => Some(("Portuguese", "por")),
+        _ => None,
+    }
+}
+
+fn query_wikidata_lang(
+    client: &reqwest::blocking::Client,
+    qid: &str,
+) -> Option<(&'static str, &'static str)> {
+    let url = format!("https://www.wikidata.org/wiki/Special:EntityData/{qid}.json");
+    let resp: serde_json::Value = client.get(&url).send().ok()?.json().ok()?;
+    let claims = &resp["entities"][qid]["claims"];
+    let p364 = claims.get("P364")?.as_array()?;
+    let lang_qid = p364.first()?["mainsnak"]["datavalue"]["value"]["id"].as_str()?;
+    map_wikidata_qid(lang_qid)
+}
+
 fn query_wikipedia_film_origin(
     title: &str,
     year: Option<u32>,
@@ -184,6 +218,7 @@ fn query_wikipedia_film_origin(
         year.map(|y| format!("{title} {y} film")),
         year.map(|y| format!("{title} {} film", y.saturating_sub(1))),
         Some(format!("{title} film")),
+        Some(title.to_string()),
     ];
 
     for query in queries.into_iter().flatten() {
@@ -217,36 +252,50 @@ fn query_wikipedia_film_origin(
             let Ok(s_json) = s_resp.json::<serde_json::Value>() else {
                 continue;
             };
-            let extract = s_json["extract"].as_str().unwrap_or("");
 
-            let langs = [
-                ("Kannada", "kan"),
-                ("Tamil", "tam"),
-                ("Telugu", "tel"),
-                ("Malayalam", "mal"),
-                ("Hindi", "hin"),
-                ("English", "eng"),
-            ];
+            let mut detected: Option<(&'static str, &'static str)> = None;
 
-            for (lang_name, lang_code) in langs {
-                if extract.contains(&format!("{lang_name}-language"))
-                    || extract.contains(&format!("{lang_name} language"))
-                {
-                    let stream_matched = stream_langs.is_empty()
-                        || stream_langs.iter().any(|s| {
-                            let norm = normalize_lang_code(s);
-                            norm == lang_code || s.eq_ignore_ascii_case(lang_code)
-                        });
+            // 1. Try Wikidata P364 (Structured Property for Original Language)
+            if let Some(qid) = s_json["wikibase_item"].as_str() {
+                detected = query_wikidata_lang(&client, qid);
+            }
 
-                    if stream_matched {
-                        return Some(FilmOrigin {
-                            title: title.to_string(),
-                            year,
-                            native_lang_code: lang_code.to_string(),
-                            native_lang_name: lang_name.to_string(),
-                            source: "Wikipedia API".to_string(),
-                        });
+            // 2. Fallback to extract text scanning if Wikidata claim missing
+            if detected.is_none() {
+                let extract = s_json["extract"].as_str().unwrap_or("");
+                let langs = [
+                    ("Kannada", "kan"),
+                    ("Hindi", "hin"),
+                    ("Tamil", "tam"),
+                    ("Telugu", "tel"),
+                    ("Malayalam", "mal"),
+                    ("English", "eng"),
+                ];
+                for (name, code) in langs {
+                    if extract.contains(&format!("{name}-language"))
+                        || extract.contains(&format!("{name} language"))
+                    {
+                        detected = Some((name, code));
+                        break;
                     }
+                }
+            }
+
+            if let Some((lang_name, lang_code)) = detected {
+                let stream_matched = stream_langs.is_empty()
+                    || stream_langs.iter().any(|s| {
+                        let norm = normalize_lang_code(s);
+                        norm == lang_code || s.eq_ignore_ascii_case(lang_code)
+                    });
+
+                if stream_matched {
+                    return Some(FilmOrigin {
+                        title: title.to_string(),
+                        year,
+                        native_lang_code: lang_code.to_string(),
+                        native_lang_name: lang_name.to_string(),
+                        source: "Wikidata P364 / Wikipedia API".to_string(),
+                    });
                 }
             }
         }
@@ -255,49 +304,7 @@ fn query_wikipedia_film_origin(
     None
 }
 
-fn infer_origin_from_context(title: &str, year: Option<u32>) -> Option<FilmOrigin> {
-    let lower = title.to_lowercase();
-    if lower.contains("mahavatar narsimha") {
-        return Some(FilmOrigin {
-            title: "Mahavatar Narsimha".to_string(),
-            year,
-            native_lang_code: "hin".to_string(),
-            native_lang_name: "Hindi".to_string(),
-            source: "Context Knowledge".to_string(),
-        });
-    }
-    if lower == "45" || lower == "brat" || lower == "mark" {
-        let (t, code, name) = match lower.as_str() {
-            "45" => ("45", "kan", "Kannada"),
-            "brat" => ("Brat", "kan", "Kannada"),
-            _ => ("Mark", "kan", "Kannada"),
-        };
-        return Some(FilmOrigin {
-            title: t.to_string(),
-            year,
-            native_lang_code: code.to_string(),
-            native_lang_name: name.to_string(),
-            source: "Context Knowledge".to_string(),
-        });
-    }
-    if lower.contains("they call him og") || lower == "og" {
-        return Some(FilmOrigin {
-            title: "They Call Him OG".to_string(),
-            year,
-            native_lang_code: "tel".to_string(),
-            native_lang_name: "Telugu".to_string(),
-            source: "Context Knowledge".to_string(),
-        });
-    }
-    if lower.contains("chhaava") {
-        return Some(FilmOrigin {
-            title: "Chhaava".to_string(),
-            year,
-            native_lang_code: "hin".to_string(),
-            native_lang_name: "Hindi".to_string(),
-            source: "Context Knowledge".to_string(),
-        });
-    }
+fn infer_origin_from_context(_title: &str, _year: Option<u32>) -> Option<FilmOrigin> {
     None
 }
 
