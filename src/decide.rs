@@ -23,6 +23,26 @@ pub fn evaluate_audio_streams(media: &MediaInfo, origin: &FilmOrigin) -> Vec<Tra
         return decisions;
     }
 
+    // Origin confidence safety gate: If origin confidence < 80% or unresolved,
+    // preserve all audio tracks as Multi.
+    if !origin.is_confident() {
+        for s in &media.audio_streams {
+            decisions.push(TrackDecision {
+                index: s.index,
+                language: s.language.clone(),
+                codec: s.codec.clone(),
+                channels: s.channel_layout_label().to_string(),
+                title: s.title.clone(),
+                action: Action::Keep,
+                reason: format!(
+                    "Preserved Multi (Origin confidence {}% < 80%)",
+                    origin.confidence
+                ),
+            });
+        }
+        return decisions;
+    }
+
     let native_code = origin.native_lang_code.as_str();
     let has_native_match = media
         .audio_streams
@@ -109,10 +129,53 @@ mod tests {
             native_lang_code: "tel".to_string(),
             native_lang_name: "Telugu".to_string(),
             source: "Test".to_string(),
+            confidence: 100,
         };
 
         let decisions = evaluate_audio_streams(&media, &origin);
         assert_eq!(decisions.len(), 1);
         assert_eq!(decisions[0].action, Action::Keep);
+    }
+
+    #[test]
+    fn test_low_confidence_preserves_multi() {
+        let media = MediaInfo {
+            path: PathBuf::from("/test.mkv"),
+            size_bytes: 1000,
+            video_count: 1,
+            subtitle_count: 1,
+            audio_streams: vec![
+                AudioStream {
+                    index: 1,
+                    codec: "aac".to_string(),
+                    channels: 6,
+                    language: "tam".to_string(),
+                    title: "Tamil".to_string(),
+                    is_default: true,
+                    is_original: false,
+                },
+                AudioStream {
+                    index: 2,
+                    codec: "aac".to_string(),
+                    channels: 6,
+                    language: "hin".to_string(),
+                    title: "Hindi".to_string(),
+                    is_default: false,
+                    is_original: false,
+                },
+            ],
+        };
+        let low_conf = FilmOrigin {
+            title: "Test".to_string(),
+            year: Some(2025),
+            native_lang_code: "hin".to_string(),
+            native_lang_name: "Hindi".to_string(),
+            source: "Gemini AI".to_string(),
+            confidence: 60,
+        };
+
+        let decisions = evaluate_audio_streams(&media, &low_conf);
+        assert_eq!(decisions.len(), 2);
+        assert!(decisions.iter().all(|d| d.action == Action::Keep));
     }
 }

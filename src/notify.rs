@@ -35,9 +35,6 @@ pub fn notify_strip(
     orig_size: u64,
     saved: u64,
 ) {
-    if saved == 0 {
-        return;
-    }
     let (kept, stripped) = format_track_summaries(decisions);
     let new_size = orig_size.saturating_sub(saved);
     let prev_str = format_bytes(orig_size);
@@ -52,6 +49,27 @@ pub fn notify_strip(
         prev_size: &prev_str,
         new_size: &new_str,
         reclaimed: &rec_str,
+    };
+    let _ = send_strip_notification(&notif);
+}
+
+pub fn notify_preserved_multi(
+    title: &str,
+    origin_desc: &str,
+    decisions: &[TrackDecision],
+    file_size: u64,
+) {
+    let (kept, _) = format_track_summaries(decisions);
+    let size_str = format_bytes(file_size);
+
+    let notif = AudioStripNotification {
+        title,
+        origin: origin_desc,
+        kept: &kept,
+        stripped: "None (Preserved Multi)",
+        prev_size: &size_str,
+        new_size: &size_str,
+        reclaimed: "0 B (Multi Kept)",
     };
     let _ = send_strip_notification(&notif);
 }

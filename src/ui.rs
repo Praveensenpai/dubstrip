@@ -49,16 +49,29 @@ pub fn render_inspection_table(
     );
 
     if origin.native_lang_code != "und" {
+        let conf_badge = if origin.is_confident() {
+            format!("[{}% confident]", origin.confidence).green()
+        } else {
+            format!("[{}% confident — UNCERTAIN]", origin.confidence)
+                .yellow()
+                .bold()
+        };
         println!(
-            "  {} {} ({}) — via {}",
+            "  {} {} ({}) {conf_badge} — via {}",
             "🧠 Detected Origin:".bold(),
             origin.native_lang_name.green().bold(),
             origin.native_lang_code.dimmed(),
             origin.source.dimmed()
         );
+        if !origin.is_confident() {
+            println!(
+                "  {} Low confidence — preserving all audio tracks as Multi",
+                "🛡️".yellow().bold()
+            );
+        }
     } else {
         println!(
-            "  {} {} (Will preserve all valid original tracks)",
+            "  {} {} (Will preserve all valid original tracks as Multi)",
             "⚠️ Detected Origin:".yellow().bold(),
             "Unresolved / Undefined".yellow()
         );

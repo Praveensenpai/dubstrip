@@ -34,6 +34,7 @@ pub fn query_gemini_film_origin(
             Ok(origin_data) => {
                 let code = origin_data["language_code"].as_str().unwrap_or("und");
                 let name = origin_data["language_name"].as_str().unwrap_or("Unknown");
+                let confidence = origin_data["confidence"].as_u64().unwrap_or(70).min(100) as u8;
                 let norm = normalize_lang_code(code);
                 return Ok(FilmOrigin {
                     title: title.to_string(),
@@ -41,6 +42,7 @@ pub fn query_gemini_film_origin(
                     native_lang_code: norm.to_string(),
                     native_lang_name: name.to_string(),
                     source: format!("Gemini AI ({model})"),
+                    confidence,
                 });
             }
             Err(e) => {
@@ -59,13 +61,21 @@ fn sanitize_filename_for_prompt(raw: &str) -> String {
 
 fn build_prompt(title: &str, year: Option<u32>, streams: &[String], raw_filename: &str) -> String {
     let clean_raw = sanitize_filename_for_prompt(raw_filename);
+    let year_display = year.map_or_else(|| "Unknown".to_string(), |y| y.to_string());
     format!(
-        "You are an expert film researcher. Identify the single original theatrical language of this movie release:\n\
+        "You are an expert film researcher. Identify the single original theatrical production language of this movie release:\n\
         - Movie Title: \"{title}\"\n\
-        - Release Year: {year:?}\n\
-        - Audio stream languages in file: {streams:?}\n\
+        - Release Year: {year_display}\n\
+        - Audio stream tracks in file: {streams:?}\n\
         - Raw release name: \"{clean_raw}\"\n\
-        Return strictly JSON with keys: \"language_code\" (3-letter ISO-639-2 e.g. kan, tel, tam, mal, hin, eng) and \"language_name\" (e.g. Kannada, Telugu, Hindi)."
+        CRITICAL RULES:\n\
+        1. Identify the authentic primary production language (e.g. Tamil for Kollywood, Telugu for Tollywood, Hindi for Bollywood, Malayalam for Mollywood, Kannada for Sandalwood, English for Hollywood, Japanese for Anime).\n\
+        2. Set 'confidence' (0 to 100). If you are uncertain or the title could be an ambiguous remake/dub, set confidence below 70.\n\
+        Return strictly JSON with keys:\n\
+        - \"language_code\": 3-letter ISO-639-2 (e.g. tam, tel, hin, mal, kan, eng, jpn)\n\
+        - \"language_name\": capitalized name (e.g. Tamil, Telugu, Hindi, Malayalam, Kannada, English)\n\
+        - \"confidence\": integer between 0 and 100\n\
+        - \"reason\": brief explanation"
     )
 }
 

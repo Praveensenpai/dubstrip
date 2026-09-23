@@ -1,6 +1,6 @@
 [package]
 name = "dubstrip"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["Praveensenpai <pvnt20@gmail.com>"]
 description = "Autonomous, AI-augmented zero-loss dub stripper for movies & series"
