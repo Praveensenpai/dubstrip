@@ -55,8 +55,15 @@ pub fn query_gemini_film_origin(
 }
 
 fn sanitize_filename_for_prompt(raw: &str) -> String {
-    let re = regex::Regex::new(r"(?i)www\.\d*(tamilmv|tamilblasters|tamilrockers|desiscenics|1tamilmv)\.[a-z]+|1tamilmv|tamilblasters|tamilrockers").unwrap_or_else(|_| regex::Regex::new("$^").expect("fallback"));
-    re.replace_all(raw, "").trim().to_string()
+    let re_domains = regex::Regex::new(
+        r"(?i)www\.[a-z0-9\.\-]+\s*-\s*|\[[a-z0-9\.\-]+\]\s*|\d*tamilmv[\.\w\-]*|tamilblasters[\.\w\-]*|tamilrockers[\.\w\-]*",
+    )
+    .unwrap_or_else(|_| regex::Regex::new("$^").expect("fallback"));
+    let re_lang_tags = regex::Regex::new(r"(?i)\[(?:Tam|Tel|Hin|Mal|Kan|Eng|Audio|\+|,|\s|-)+\]")
+        .unwrap_or_else(|_| regex::Regex::new("$^").expect("fallback"));
+    let s = re_domains.replace_all(raw, "");
+    let s = re_lang_tags.replace_all(&s, "");
+    s.trim().to_string()
 }
 
 fn build_prompt(title: &str, year: Option<u32>, streams: &[String], raw_filename: &str) -> String {
@@ -67,10 +74,11 @@ fn build_prompt(title: &str, year: Option<u32>, streams: &[String], raw_filename
         - Movie Title: \"{title}\"\n\
         - Release Year: {year_display}\n\
         - Audio stream tracks in file: {streams:?}\n\
-        - Raw release name: \"{clean_raw}\"\n\
+        - Cleaned release name: \"{clean_raw}\"\n\
         CRITICAL RULES:\n\
-        1. Identify the authentic primary production language (e.g. Tamil for Kollywood, Telugu for Tollywood, Hindi for Bollywood, Malayalam for Mollywood, Kannada for Sandalwood, English for Hollywood, Japanese for Anime).\n\
-        2. Set 'confidence' (0 to 100). If you are uncertain or the title could be an ambiguous remake/dub, set confidence below 70.\n\
+        1. Identify the authentic primary production language (e.g. Kannada for Sandalwood / Kichcha Sudeepa films, Tamil for Kollywood, Telugu for Tollywood, Hindi for Bollywood, Malayalam for Mollywood, English for Hollywood, Japanese for Anime).\n\
+        2. ANTI-BIAS WARNING: Do NOT assume Track 1 or torrent release ordering indicates the native language. Piracy groups frequently re-order tracks to place Tamil or Hindi first even for Kannada or Malayalam movies. Base your decision solely on the movie's production industry, cast, and director.\n\
+        3. Set 'confidence' (0 to 100). If you are uncertain or the title could be an ambiguous remake/dub, set confidence below 70.\n\
         Return strictly JSON with keys:\n\
         - \"language_code\": 3-letter ISO-639-2 (e.g. tam, tel, hin, mal, kan, eng, jpn)\n\
         - \"language_name\": capitalized name (e.g. Tamil, Telugu, Hindi, Malayalam, Kannada, English)\n\

@@ -120,14 +120,11 @@ pub fn parse_title_and_year(path: &Path) -> (String, Option<u32>) {
         |s| s.to_string_lossy().into_owned(),
     );
 
-    let cleaned = filename
-        .replace("[1TamilMV.day]", "")
-        .replace("www.1TamilMV.day -", "")
-        .replace("www.1TamilMV.day", "")
-        .replace("www.1TamilMV.pink -", "")
-        .replace("www.1TamilMV.pink", "")
-        .replace("1TamilMV", "")
-        .replace("TamilBlasters", "");
+    let re_tracker = Regex::new(
+        r"(?i)^(www\.[a-z0-9\.\-]+\s*-\s*|\[[a-z0-9\.\-]+\]\s*|\d*tamilmv[\.\w\-]*\s*-\s*|tamilblasters[\.\w\-]*\s*-\s*)",
+    )
+    .unwrap_or_else(|_| Regex::new("$^").expect("fallback"));
+    let cleaned = re_tracker.replace(&filename, "");
 
     let re_year =
         Regex::new(r"\((\d{4})\)").unwrap_or_else(|_| Regex::new("$^").expect("fallback"));
@@ -198,5 +195,13 @@ mod tests {
             confidence: 65,
         };
         assert!(!unconfident.is_confident());
+    }
+
+    #[test]
+    fn test_parse_title_and_year_mark() {
+        let p = Path::new("/torrents/www.1TamilMV.haus - Mark (2026) TRUE WEB-DL - 1080p - AVC - [Tam + Tel + Mal + Kan] - (DD+5.1 - 192Kbps & AAC) - 4.2GB - ESub.mkv");
+        let (title, year) = parse_title_and_year(p);
+        assert_eq!(title, "Mark");
+        assert_eq!(year, Some(2026));
     }
 }
