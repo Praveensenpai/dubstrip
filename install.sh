@@ -57,6 +57,20 @@ case ":$PATH:" in
     *) export PATH="$INSTALL_DIR:$PATH" ;;
 esac
 
+CONFIG_FILE="${HOME}/.config/dubstrip/config.toml"
+if [ ! -f "$CONFIG_FILE" ]; then
+    mkdir -p "$(dirname "$CONFIG_FILE")"
+    cat << 'EOF' > "$CONFIG_FILE"
+# DubStrip Configuration
+deepseek_url = "http://mochi:4000/v1/chat/completions"
+deepseek_model = "v4.1flash"
+deepseek_api_key = "dseeker"
+enable_deepseek = true
+gemini_model = "gemini-3.1-flash-lite"
+EOF
+    echo "⚙️  Initialized default DeepSeek configuration in $CONFIG_FILE"
+fi
+
 if [ -f "${HOME}/.bashrc" ] && ! grep -q '\.local/bin' "${HOME}/.bashrc"; then
     printf '\n# User local binaries\nexport PATH="%s:$PATH"\n' "$INSTALL_DIR" >> "${HOME}/.bashrc"
 fi

@@ -7,6 +7,10 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DubstripConfig {
+    pub deepseek_url: Option<String>,
+    pub deepseek_model: Option<String>,
+    pub deepseek_api_key: Option<String>,
+    pub enable_deepseek: Option<bool>,
     pub gemini_api_key: Option<String>,
     pub gemini_model: Option<String>,
 }
@@ -36,22 +40,51 @@ fn parse_toml_config(content: &str) -> DubstripConfig {
     let mut config = DubstripConfig::default();
     for line in content.lines() {
         let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("deepseek_url") {
+            let clean = extract_value(rest);
+            if !clean.is_empty() {
+                config.deepseek_url = Some(clean.to_string());
+            }
+        }
+        if let Some(rest) = trimmed.strip_prefix("deepseek_model") {
+            let clean = extract_value(rest);
+            if !clean.is_empty() {
+                config.deepseek_model = Some(clean.to_string());
+            }
+        }
+        if let Some(rest) = trimmed.strip_prefix("deepseek_api_key") {
+            let clean = extract_value(rest);
+            if !clean.is_empty() {
+                config.deepseek_api_key = Some(clean.to_string());
+            }
+        }
+        if let Some(rest) = trimmed.strip_prefix("enable_deepseek") {
+            let clean = extract_value(rest);
+            if clean == "true" {
+                config.enable_deepseek = Some(true);
+            } else if clean == "false" {
+                config.enable_deepseek = Some(false);
+            }
+        }
         if let Some(rest) = trimmed.strip_prefix("gemini_api_key") {
-            let key_val = rest.trim_start_matches(|c: char| c == '=' || c.is_whitespace());
-            let clean = key_val.trim_matches('"').trim_matches('\'').trim();
+            let clean = extract_value(rest);
             if !clean.is_empty() {
                 config.gemini_api_key = Some(clean.to_string());
             }
         }
         if let Some(rest) = trimmed.strip_prefix("gemini_model") {
-            let key_val = rest.trim_start_matches(|c: char| c == '=' || c.is_whitespace());
-            let clean = key_val.trim_matches('"').trim_matches('\'').trim();
+            let clean = extract_value(rest);
             if !clean.is_empty() {
                 config.gemini_model = Some(clean.to_string());
             }
         }
     }
     config
+}
+
+fn extract_value(rest: &str) -> &str {
+    let key_val = rest.trim_start_matches(|c: char| c == '=' || c.is_whitespace());
+    key_val.trim_matches('"').trim_matches('\'').trim()
 }
 
 /// Saves the configuration to ~/.config/dubstrip/config.toml.
@@ -61,6 +94,18 @@ pub fn save_config(config: &DubstripConfig) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     let mut content = String::from("# DubStrip Configuration\n");
+    if let Some(url) = &config.deepseek_url {
+        content.push_str(&format!("deepseek_url = \"{url}\"\n"));
+    }
+    if let Some(model) = &config.deepseek_model {
+        content.push_str(&format!("deepseek_model = \"{model}\"\n"));
+    }
+    if let Some(key) = &config.deepseek_api_key {
+        content.push_str(&format!("deepseek_api_key = \"{key}\"\n"));
+    }
+    if let Some(enabled) = config.enable_deepseek {
+        content.push_str(&format!("enable_deepseek = {enabled}\n"));
+    }
     if let Some(key) = &config.gemini_api_key {
         content.push_str(&format!("gemini_api_key = \"{key}\"\n"));
     }
@@ -71,7 +116,79 @@ pub fn save_config(config: &DubstripConfig) -> Result<()> {
     Ok(())
 }
 
-/// Resolves the configured or default Gemini model (defaults to gemini-3.5-flash).
+/// Resolves whether DeepSeek is enabled as primary (defaults to true).
+#[must_use]
+pub fn is_deepseek_enabled() -> bool {
+    if let Ok(val) = std::env::var("ENABLE_DEEPSEEK") {
+        return val.trim() != "0" && val.trim().to_lowercase() != "false";
+    }
+    load_config().enable_deepseek.unwrap_or(true)
+}
+
+/// Resolves the DeepSeek URL endpoint (defaults to http://mochi:4000/v1/chat/completions).
+#[must_use]
+pub fn get_deepseek_url() -> String {
+    if let Ok(url) = std::env::var("DEEPSEEK_URL").or_else(|_| std::env::var("DEEPSEEK_BASE_URL")) {
+        let trimmed = url.trim();
+        if !trimmed.is_empty() {
+            if trimmed.ends_with("/chat/completions") {
+                return trimmed.to_string();
+            } else if trimmed.ends_with("/v1") {
+                return format!("{trimmed}/chat/completions");
+            } else {
+                return format!("{trimmed}/v1/chat/completions");
+            }
+        }
+    }
+    let cfg = load_config();
+    if let Some(url) = cfg.deepseek_url {
+        let trimmed = url.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    "http://mochi:4000/v1/chat/completions".to_string()
+}
+
+/// Resolves the DeepSeek model name (defaults to v4.1flash).
+#[must_use]
+pub fn get_deepseek_model() -> String {
+    if let Ok(model) = std::env::var("DEEPSEEK_MODEL") {
+        let trimmed = model.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    let cfg = load_config();
+    if let Some(model) = cfg.deepseek_model {
+        let trimmed = model.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    "v4.1flash".to_string()
+}
+
+/// Resolves the DeepSeek API key (defaults to dseeker).
+#[must_use]
+pub fn get_deepseek_key() -> String {
+    if let Ok(key) = std::env::var("DEEPSEEK_API_KEY").or_else(|_| std::env::var("DEEPSEEKER_API_KEY")) {
+        let trimmed = key.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    let cfg = load_config();
+    if let Some(key) = cfg.deepseek_api_key {
+        let trimmed = key.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    "dseeker".to_string()
+}
+
+/// Resolves the configured or default Gemini model (defaults to gemini-3.1-flash-lite).
 #[must_use]
 pub fn get_gemini_model() -> String {
     if let Ok(model) = std::env::var("GEMINI_MODEL") {
@@ -87,7 +204,7 @@ pub fn get_gemini_model() -> String {
             return trimmed.to_string();
         }
     }
-    "gemini-3.6-flash".to_string()
+    "gemini-3.1-flash-lite".to_string()
 }
 
 /// Resolves Gemini API key with priority:

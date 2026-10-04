@@ -7,6 +7,102 @@ use std::time::Duration;
 
 const RETRY_DELAYS: &[u64] = &[1, 2, 5, 10, 15, 30, 60];
 
+pub fn query_ai_film_origin(
+    title: &str,
+    year: Option<u32>,
+    streams: &[String],
+    raw_filename: &str,
+    gemini_api_key: Option<&str>,
+) -> Result<FilmOrigin> {
+    if crate::config::is_deepseek_enabled() {
+        match query_deepseek_film_origin(title, year, streams, raw_filename) {
+            Ok(origin) => return Ok(origin),
+            Err(err) => {
+                eprintln!("  ℹ DeepSeek primary attempt failed ({err}); falling back to Gemini...");
+            }
+        }
+    }
+
+    if let Some(key) = gemini_api_key {
+        return query_gemini_film_origin(title, year, streams, raw_filename, key);
+    }
+
+    anyhow::bail!("No AI provider available (DeepSeek failed and no Gemini API key configured)")
+}
+
+pub fn query_deepseek_film_origin(
+    title: &str,
+    year: Option<u32>,
+    streams: &[String],
+    raw_filename: &str,
+) -> Result<FilmOrigin> {
+    let url = crate::config::get_deepseek_url();
+    let model = crate::config::get_deepseek_model();
+    let api_key = crate::config::get_deepseek_key();
+    let prompt = build_prompt(title, year, streams, raw_filename);
+
+    let client = Client::builder().timeout(Duration::from_secs(12)).build()?;
+    let payload = json!({
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.1
+    });
+
+    let resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let err_text = resp.text().unwrap_or_default();
+        anyhow::bail!("DeepSeek API returned HTTP {status}: {err_text}");
+    }
+
+    let body: serde_json::Value = resp.json()?;
+    let content = body["choices"][0]["message"]["content"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Missing message content in DeepSeek response"))?;
+
+    let cleaned = clean_json_text(content);
+    let origin_data: serde_json::Value = serde_json::from_str(&cleaned)
+        .map_err(|e| anyhow::anyhow!("Failed to parse DeepSeek JSON ({e}): {cleaned}"))?;
+
+    let code = origin_data["language_code"].as_str().unwrap_or("und");
+    let name = origin_data["language_name"].as_str().unwrap_or("Unknown");
+    let confidence = origin_data["confidence"].as_u64().unwrap_or(80).min(100) as u8;
+    let norm = normalize_lang_code(code);
+
+    Ok(FilmOrigin {
+        title: title.to_string(),
+        year,
+        native_lang_code: norm.to_string(),
+        native_lang_name: name.to_string(),
+        source: format!("DeepSeek ({model})"),
+        confidence,
+    })
+}
+
+fn clean_json_text(raw: &str) -> String {
+    let mut s = raw.trim();
+    if s.starts_with("```json") {
+        s = &s[7..];
+    } else if s.starts_with("```") {
+        s = &s[3..];
+    }
+    if s.ends_with("```") {
+        s = &s[..s.len() - 3];
+    }
+    s.trim().to_string()
+}
+
 pub fn query_gemini_film_origin(
     title: &str,
     year: Option<u32>,
@@ -18,8 +114,8 @@ pub fn query_gemini_film_origin(
     let preferred = crate::config::get_gemini_model();
     let candidates = [
         preferred.as_str(),
-        "gemini-3.6-flash",
-        "gemini-flash-latest",
+        "gemini-3.1-flash-lite",
+        "gemini-3.8-flash",
     ];
 
     let prompt = build_prompt(title, year, streams, raw_filename);

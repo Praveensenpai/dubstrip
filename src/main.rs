@@ -63,11 +63,27 @@ enum Commands {
     },
     /// Configure Google Gemini API key and persistent settings
     Config {
+        /// Store DeepSeek URL endpoint (defaults to http://mochi:4000/v1/chat/completions)
+        #[arg(long)]
+        set_deepseek_url: Option<String>,
+
+        /// Store DeepSeek model (defaults to v4.1flash)
+        #[arg(long)]
+        set_deepseek_model: Option<String>,
+
+        /// Store DeepSeek API key (defaults to dseeker)
+        #[arg(long)]
+        set_deepseek_key: Option<String>,
+
+        /// Enable or disable DeepSeek as primary AI provider
+        #[arg(long)]
+        enable_deepseek: Option<bool>,
+
         /// Store Gemini API key persistently in ~/.config/dubstrip/config.toml
         #[arg(long)]
         set_key: Option<String>,
 
-        /// Preferred Gemini model (defaults to gemini-3.6-flash)
+        /// Preferred Gemini model (defaults to gemini-3.1-flash-lite)
         #[arg(long)]
         set_model: Option<String>,
     },
@@ -89,13 +105,53 @@ fn main() -> Result<()> {
             auto,
             dry_run,
         } => sweep::handle_sweep(&path, auto, dry_run),
-        Commands::Config { set_key, set_model } => handle_config(set_key, set_model),
+        Commands::Config {
+            set_deepseek_url,
+            set_deepseek_model,
+            set_deepseek_key,
+            enable_deepseek,
+            set_key,
+            set_model,
+        } => handle_config(
+            set_deepseek_url,
+            set_deepseek_model,
+            set_deepseek_key,
+            enable_deepseek,
+            set_key,
+            set_model,
+        ),
     }
 }
 
-fn handle_config(set_key: Option<String>, set_model: Option<String>) -> Result<()> {
-    if set_key.is_some() || set_model.is_some() {
+fn handle_config(
+    set_deepseek_url: Option<String>,
+    set_deepseek_model: Option<String>,
+    set_deepseek_key: Option<String>,
+    enable_deepseek: Option<bool>,
+    set_key: Option<String>,
+    set_model: Option<String>,
+) -> Result<()> {
+    let has_updates = set_deepseek_url.is_some()
+        || set_deepseek_model.is_some()
+        || set_deepseek_key.is_some()
+        || enable_deepseek.is_some()
+        || set_key.is_some()
+        || set_model.is_some();
+
+    if has_updates {
         let mut cfg = config::load_config();
+        if let Some(url) = set_deepseek_url {
+            cfg.deepseek_url = Some(url.trim().to_string());
+        }
+        if let Some(model) = set_deepseek_model {
+            cfg.deepseek_model = Some(model.trim().to_string());
+        }
+        if let Some(key) = set_deepseek_key {
+            cfg.deepseek_api_key = Some(key.trim().to_string());
+        }
+        if let Some(enabled) = enable_deepseek {
+            cfg.enable_deepseek = Some(enabled);
+        }
         if let Some(key) = set_key {
             cfg.gemini_api_key = Some(key.trim().to_string());
         }
@@ -111,7 +167,27 @@ fn handle_config(set_key: Option<String>, set_model: Option<String>) -> Result<(
     }
 
     println!("\n  {} DubStrip Configuration Status", "⚙️".cyan().bold());
-    println!("  {}", "─".repeat(45).dimmed());
+    println!("  {}", "─".repeat(50).dimmed());
+    println!("  {}", "PRIMARY PROVIDER: DeepSeek".bold().bright_blue());
+    println!(
+        "  • Status:         {}",
+        if config::is_deepseek_enabled() {
+            "Enabled".green()
+        } else {
+            "Disabled".yellow()
+        }
+    );
+    println!("  • DeepSeek URL:   {}", config::get_deepseek_url().cyan());
+    println!("  • DeepSeek Model: {}", config::get_deepseek_model().cyan());
+    let ds_key = config::get_deepseek_key();
+    let masked_ds = if ds_key.len() > 6 {
+        format!("{}...{}", &ds_key[..3], &ds_key[ds_key.len() - 3..])
+    } else {
+        "******".to_string()
+    };
+    println!("  • DeepSeek Key:   {}", masked_ds.dimmed());
+
+    println!("\n  {}", "SECONDARY FALLBACK: Google Gemini".bold().bright_magenta());
     let active_key = config::get_or_prompt_gemini_key(false);
     if let Some(key) = active_key {
         let masked = if key.len() > 8 {
@@ -123,7 +199,7 @@ fn handle_config(set_key: Option<String>, set_model: Option<String>) -> Result<(
     } else {
         println!(
             "  • Gemini API Key: {}",
-            "Not set (local heuristics only)".dimmed()
+            "Not set (optional secondary fallback)".dimmed()
         );
     }
     let model = config::get_gemini_model();

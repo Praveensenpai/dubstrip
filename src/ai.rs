@@ -62,16 +62,15 @@ pub fn resolve_film_origin(
         .file_name()
         .map_or_else(|| raw_title.clone(), |s| s.to_string_lossy().into_owned());
 
-    if let Some(api_key) = crate::config::get_or_prompt_gemini_key(interactive) {
-        if let Ok(origin) = crate::gemini::query_gemini_film_origin(
-            &raw_title,
-            year,
-            stream_langs,
-            &raw_name,
-            &api_key,
-        ) {
-            return Ok(origin);
-        }
+    let gemini_key = crate::config::get_or_prompt_gemini_key(interactive);
+    if let Ok(origin) = crate::gemini::query_ai_film_origin(
+        &raw_title,
+        year,
+        stream_langs,
+        &raw_name,
+        gemini_key.as_deref(),
+    ) {
+        return Ok(origin);
     }
 
     if let Some(origin) = infer_origin_from_streams(&raw_title, year, stream_langs) {
