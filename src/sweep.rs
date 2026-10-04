@@ -14,20 +14,16 @@ struct SweepJob {
     keep_indices: Vec<u32>,
     strip_count: usize,
     filename: String,
-    title: String,
-    origin_desc: String,
-    decisions: Vec<ui::TrackDecision>,
-    orig_size: u64,
 }
 
-pub fn handle_sweep(dir: &Path, auto: bool, dry_run: bool) -> Result<()> {
+pub fn handle_sweep(dir: &Path, auto: bool, dry_run: bool, quiet: bool, anime: bool) -> Result<()> {
     println!(
         "\n  {} Sweeping directory: {}",
         "🔍".cyan().bold(),
         dir.display().to_string().bold()
     );
 
-    let jobs = collect_sweep_jobs(dir, auto, dry_run)?;
+    let jobs = collect_sweep_jobs(dir, auto, dry_run, anime)?;
     if jobs.is_empty() {
         println!(
             "\n  {} No media files with redundant dubs found.\n",
@@ -45,7 +41,7 @@ pub fn handle_sweep(dir: &Path, auto: bool, dry_run: bool) -> Result<()> {
         return Ok(());
     }
 
-    let (successful, total_saved) = execute_sweep_jobs(&jobs);
+    let (successful, total_saved, total_tracks) = execute_sweep_jobs(&jobs);
     println!(
         "  {} Batch sweep complete! Processed {}/{} files. Total space reclaimed: {}\n",
         "✔".green().bold(),
@@ -53,11 +49,12 @@ pub fn handle_sweep(dir: &Path, auto: bool, dry_run: bool) -> Result<()> {
         jobs.len(),
         remux::format_bytes(total_saved).green().bold()
     );
+    notify::notify_batch_summary(successful, total_tracks, total_saved, quiet);
 
     Ok(())
 }
 
-fn collect_sweep_jobs(dir: &Path, auto: bool, dry_run: bool) -> Result<Vec<SweepJob>> {
+fn collect_sweep_jobs(dir: &Path, auto: bool, dry_run: bool, anime: bool) -> Result<Vec<SweepJob>> {
     let mut jobs = Vec::new();
     for entry in walk_video_files(dir) {
         let Ok(media) = probe::probe_file(&entry) else {
@@ -69,6 +66,11 @@ fn collect_sweep_jobs(dir: &Path, auto: bool, dry_run: bool) -> Result<Vec<Sweep
             .map(|s| s.language.clone())
             .collect();
         let origin = ai::resolve_film_origin(&entry, &stream_langs, !auto)?;
+        let origin = if anime {
+            ai::force_japanese(origin, &stream_langs)
+        } else {
+            origin
+        };
         let decisions = decide::evaluate_audio_streams(&media, &origin);
         let strip_count = decisions
             .iter()
@@ -92,10 +94,6 @@ fn collect_sweep_jobs(dir: &Path, auto: bool, dry_run: bool) -> Result<Vec<Sweep
 
         ui::render_inspection_table(&media, &origin, &decisions);
 
-        let origin_desc = format!(
-            "{} [{}% confident] (via {})",
-            origin.native_lang_name, origin.confidence, origin.source
-        );
         let keep_indices = if dry_run {
             println!("  🔍 [Dry-run] Would queue for stripping ({strip_count} dubs)");
             Vec::new()
@@ -117,17 +115,14 @@ fn collect_sweep_jobs(dir: &Path, auto: bool, dry_run: bool) -> Result<Vec<Sweep
             keep_indices,
             strip_count,
             filename,
-            title: origin.title,
-            origin_desc,
-            decisions,
-            orig_size: media.size_bytes,
         });
     }
     Ok(jobs)
 }
 
-fn execute_sweep_jobs(jobs: &[SweepJob]) -> (usize, u64) {
+fn execute_sweep_jobs(jobs: &[SweepJob]) -> (usize, u64, usize) {
     let mut total_saved = 0u64;
+    let mut total_tracks = 0usize;
     let mut successful = 0usize;
     let total = jobs.len();
 
@@ -147,6 +142,7 @@ fn execute_sweep_jobs(jobs: &[SweepJob]) -> (usize, u64) {
         match remux::remux_lossless(&job.path, &job.keep_indices) {
             Ok(saved) => {
                 total_saved += saved;
+                total_tracks += job.strip_count;
                 successful += 1;
                 println!(
                     "    {} Stripped {} dubs (reclaimed: {})\n",
@@ -154,20 +150,13 @@ fn execute_sweep_jobs(jobs: &[SweepJob]) -> (usize, u64) {
                     job.strip_count,
                     remux::format_bytes(saved).green().bold()
                 );
-                notify::notify_strip(
-                    &job.title,
-                    &job.origin_desc,
-                    &job.decisions,
-                    job.orig_size,
-                    saved,
-                );
             }
             Err(err) => {
                 eprintln!("    ⚠️ Failed to remux {}: {err}\n", job.filename);
             }
         }
     }
-    (successful, total_saved)
+    (successful, total_saved, total_tracks)
 }
 
 fn walk_video_files(dir: &Path) -> Vec<PathBuf> {

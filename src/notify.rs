@@ -34,7 +34,11 @@ pub fn notify_strip(
     decisions: &[TrackDecision],
     orig_size: u64,
     saved: u64,
+    quiet: bool,
 ) {
+    if quiet {
+        return;
+    }
     let (kept, stripped) = format_track_summaries(decisions);
     let new_size = orig_size.saturating_sub(saved);
     let prev_str = format_bytes(orig_size);
@@ -58,7 +62,11 @@ pub fn notify_preserved_multi(
     origin_desc: &str,
     decisions: &[TrackDecision],
     file_size: u64,
+    quiet: bool,
 ) {
+    if quiet {
+        return;
+    }
     let (kept, _) = format_track_summaries(decisions);
     let size_str = format_bytes(file_size);
 
@@ -70,6 +78,28 @@ pub fn notify_preserved_multi(
         prev_size: &size_str,
         new_size: &size_str,
         reclaimed: "0 B (Multi Kept)",
+    };
+    let _ = send_strip_notification(&notif);
+}
+
+/// Sends a single aggregate card for a batch run (sweep), instead of one per file.
+pub fn notify_batch_summary(files: usize, tracks: usize, reclaimed: u64, quiet: bool) {
+    if quiet || files == 0 {
+        return;
+    }
+    let title = format!("Batch sweep — {files} file(s)");
+    let origin = "Multiple titles".to_string();
+    let kept = "Native tracks retained".to_string();
+    let stripped = format!("{tracks} dub track(s) across {files} file(s)");
+    let rec_str = format_bytes(reclaimed);
+    let notif = AudioStripNotification {
+        title: &title,
+        origin: &origin,
+        kept: &kept,
+        stripped: &stripped,
+        prev_size: "—",
+        new_size: "—",
+        reclaimed: &rec_str,
     };
     let _ = send_strip_notification(&notif);
 }

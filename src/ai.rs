@@ -22,6 +22,26 @@ impl FilmOrigin {
     }
 }
 
+/// Forces the origin to Japanese when a Japanese track is present.
+///
+/// Used for anime, where the original audio is Japanese by definition and the
+/// low-confidence "preserve Multi" gate must not apply. If no Japanese track
+/// exists, the origin is returned unchanged so the existing safe fallback runs.
+#[must_use]
+pub fn force_japanese(origin: FilmOrigin, streams: &[String]) -> FilmOrigin {
+    let has_japanese = streams.iter().any(|s| normalize_lang_code(s) == "jpn");
+    if !has_japanese {
+        return origin;
+    }
+    FilmOrigin {
+        native_lang_code: "jpn".to_string(),
+        native_lang_name: "Japanese".to_string(),
+        source: format!("{} + anime override", origin.source),
+        confidence: 100,
+        ..origin
+    }
+}
+
 #[must_use]
 pub fn normalize_lang_code(code: &str) -> &'static str {
     match code.trim().to_lowercase().as_str() {
@@ -150,6 +170,40 @@ pub fn parse_title_and_year(path: &Path) -> (String, Option<u32>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_force_japanese_overrides_confidence() {
+        let origin = FilmOrigin {
+            title: "Laid-Back Camp".to_string(),
+            year: Some(2018),
+            native_lang_code: "eng".to_string(),
+            native_lang_name: "English".to_string(),
+            source: "Wikidata".to_string(),
+            confidence: 60,
+        };
+        let streams = vec!["eng".to_string(), "jpn".to_string()];
+        let forced = force_japanese(origin, &streams);
+        assert_eq!(forced.native_lang_code, "jpn");
+        assert_eq!(forced.native_lang_name, "Japanese");
+        assert_eq!(forced.confidence, 100);
+        assert!(forced.is_confident());
+    }
+
+    #[test]
+    fn test_force_japanese_no_japanese_track_unchanged() {
+        let origin = FilmOrigin {
+            title: "Mark".to_string(),
+            year: Some(2026),
+            native_lang_code: "tam".to_string(),
+            native_lang_name: "Tamil".to_string(),
+            source: "Gemini AI".to_string(),
+            confidence: 40,
+        };
+        let streams = vec!["tam".to_string(), "hin".to_string()];
+        let forced = force_japanese(origin, &streams);
+        assert_eq!(forced.native_lang_code, "tam");
+        assert_eq!(forced.confidence, 40);
+    }
 
     #[test]
     fn test_normalize_lang_code() {

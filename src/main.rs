@@ -47,6 +47,14 @@ enum Commands {
         /// Skip safety settling check for completed local files
         #[arg(long)]
         force: bool,
+
+        /// Suppress the per-file Telegram notification (caller aggregates)
+        #[arg(short = 'q', long)]
+        quiet: bool,
+
+        /// Treat as anime: keep only Japanese audio, never preserve Multi
+        #[arg(long)]
+        anime: bool,
     },
     /// Sweep a directory and strip unwanted dub audio across all media files
     Sweep {
@@ -60,6 +68,14 @@ enum Commands {
         /// Only preview changes and space savings without modifying files
         #[arg(long)]
         dry_run: bool,
+
+        /// Suppress the aggregate Telegram notification
+        #[arg(short = 'q', long)]
+        quiet: bool,
+
+        /// Treat as anime: keep only Japanese audio, never preserve Multi
+        #[arg(long)]
+        anime: bool,
     },
     /// Configure Google Gemini API key and persistent settings
     Config {
@@ -99,12 +115,16 @@ fn main() -> Result<()> {
             auto,
             dry_run,
             force,
-        } => handle_strip(&path, auto, dry_run, force),
+            quiet,
+            anime,
+        } => handle_strip(&path, auto, dry_run, force, quiet, anime),
         Commands::Sweep {
             path,
             auto,
             dry_run,
-        } => sweep::handle_sweep(&path, auto, dry_run),
+            quiet,
+            anime,
+        } => sweep::handle_sweep(&path, auto, dry_run, quiet, anime),
         Commands::Config {
             set_deepseek_url,
             set_deepseek_model,
@@ -228,7 +248,14 @@ fn handle_inspect(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn handle_strip(path: &Path, auto: bool, dry_run: bool, force: bool) -> Result<()> {
+fn handle_strip(
+    path: &Path,
+    auto: bool,
+    dry_run: bool,
+    force: bool,
+    quiet: bool,
+    anime: bool,
+) -> Result<()> {
     if !safety::is_file_safe_and_complete(path, force)? {
         println!(
             "  {} Skipping {}: File is downloading, active, or incomplete.",
@@ -245,6 +272,11 @@ fn handle_strip(path: &Path, auto: bool, dry_run: bool, force: bool) -> Result<(
         .map(|s| s.language.clone())
         .collect();
     let origin = ai::resolve_film_origin(path, &stream_langs, !auto)?;
+    let origin = if anime {
+        ai::force_japanese(origin, &stream_langs)
+    } else {
+        origin
+    };
     let decisions = decide::evaluate_audio_streams(&media, &origin);
 
     ui::render_inspection_table(&media, &origin, &decisions);
@@ -274,6 +306,7 @@ fn handle_strip(path: &Path, auto: bool, dry_run: bool, force: bool) -> Result<(
                 &origin_desc,
                 &decisions,
                 media.size_bytes,
+                quiet,
             );
         } else {
             println!(
@@ -316,6 +349,7 @@ fn handle_strip(path: &Path, auto: bool, dry_run: bool, force: bool) -> Result<(
         &decisions,
         media.size_bytes,
         saved,
+        quiet,
     );
 
     Ok(())
