@@ -172,7 +172,9 @@ pub fn get_deepseek_model() -> String {
 /// Resolves the DeepSeek API key (defaults to dseeker).
 #[must_use]
 pub fn get_deepseek_key() -> String {
-    if let Ok(key) = std::env::var("DEEPSEEK_API_KEY").or_else(|_| std::env::var("DEEPSEEKER_API_KEY")) {
+    if let Ok(key) =
+        std::env::var("DEEPSEEK_API_KEY").or_else(|_| std::env::var("DEEPSEEKER_API_KEY"))
+    {
         let trimmed = key.trim();
         if !trimmed.is_empty() {
             return trimmed.to_string();

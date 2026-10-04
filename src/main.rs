@@ -178,7 +178,10 @@ fn handle_config(
         }
     );
     println!("  • DeepSeek URL:   {}", config::get_deepseek_url().cyan());
-    println!("  • DeepSeek Model: {}", config::get_deepseek_model().cyan());
+    println!(
+        "  • DeepSeek Model: {}",
+        config::get_deepseek_model().cyan()
+    );
     let ds_key = config::get_deepseek_key();
     let masked_ds = if ds_key.len() > 6 {
         format!("{}...{}", &ds_key[..3], &ds_key[ds_key.len() - 3..])
@@ -187,7 +190,10 @@ fn handle_config(
     };
     println!("  • DeepSeek Key:   {}", masked_ds.dimmed());
 
-    println!("\n  {}", "SECONDARY FALLBACK: Google Gemini".bold().bright_magenta());
+    println!(
+        "\n  {}",
+        "SECONDARY FALLBACK: Google Gemini".bold().bright_magenta()
+    );
     let active_key = config::get_or_prompt_gemini_key(false);
     if let Some(key) = active_key {
         let masked = if key.len() > 8 {
